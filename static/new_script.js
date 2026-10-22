@@ -38,9 +38,8 @@ window.t = function(key, params = {}) {
     if (lang === 'en') return enVal;
     
     // Some keys might return identical in English (untranslated). If it's untranslated, just return English.
-    if (localVal === enVal || localVal === key) return enVal;
-    
-    return `${enVal} / ${localVal}`;
+    if (localVal === key) return enVal;
+    return localVal;
 };
 
 const LOCATION_TRANSLATIONS = {
@@ -62,14 +61,25 @@ const LOCATION_TRANSLATIONS = {
     "Groundnut": { "en": "Groundnut", "hi": "मूंगफली", "ta": "நிலக்கடலை", "te": "వేరుశెనగ", "bn": "চিনাবাদাম", "mr": "भुईमूग", "pa": "ਮੂੰਗਫਲੀ", "gu": "મગફળી", "kn": "ಕಡಲೆಕಾಯಿ", "ml": "നിലക്കടല" },
     "Sorghum": { "en": "Sorghum", "hi": "ज्वार", "ta": "சோளம்", "te": "జొన్న", "bn": "জোয়ার", "mr": "ज्वारी", "pa": "ਜਵਾਰ", "gu": "જુવાર", "kn": "ಜೋಳ", "ml": "ചോളം" }
 };
+const NO_LAND_TEXT = {
+  en: ['No land detected', 'AI advisory is unavailable for water bodies.'],
+  hi: ['भूमि नहीं मिली', 'जल निकायों के लिए AI सलाह उपलब्ध नहीं है।'],
+  ta: ['நிலம் கண்டறியப்படவில்லை', 'நீர்நிலைகளுக்கு AI ஆலோசனை கிடைக்காது.'],
+  te: ['భూమి గుర్తించబడలేదు', 'నీటి వనరులకు AI సలహా అందుబాటులో లేదు.'],
+  bn: ['কোনও জমি শনাক্ত হয়নি', 'জলাশয়ের জন্য AI পরামর্শ উপলভ্য নয়।'],
+  mr: ['जमीन आढळली नाही', 'जलाशयांसाठी AI सल्ला उपलब्ध नाही.'],
+  pa: ['ਕੋਈ ਜ਼ਮੀਨ ਨਹੀਂ ਮਿਲੀ', 'ਜਲ ਸਰੋਤਾਂ ਲਈ AI ਸਲਾਹ ਉਪਲਬਧ ਨਹੀਂ ਹੈ।'],
+  gu: ['જમીન મળી નથી', 'જળાશયો માટે AI સલાહ ઉપલબ્ધ નથી.'],
+  kn: ['ಭೂಮಿ ಪತ್ತೆಯಾಗಿಲ್ಲ', 'ಜಲಮೂಲಗಳಿಗೆ AI ಸಲಹೆ ಲಭ್ಯವಿಲ್ಲ.'],
+  ml: ['കര കണ്ടെത്തിയില്ല', 'ജലാശയങ്ങൾക്ക് AI ഉപദേശം ലഭ്യമല്ല.']
+};
 
 window.localizePlace = function(name, language = currentLanguage) {
     if(!name) return "";
     const enStr = LOCATION_TRANSLATIONS[name]?.en || name;
     if (language === 'en') return enStr;
     const localStr = LOCATION_TRANSLATIONS[name]?.[language] || enStr;
-    if (localStr === enStr) return enStr;
-    return `${enStr} / ${localStr}`;
+    return localStr;
 };
 
 // Also redefine localizeLocation to handle structured "City, State"
@@ -100,9 +110,12 @@ function normalizeLongitude(lon) {
     return ((Number(lon) + 180) % 360 + 360) % 360 - 180;
 }
 
+const indiaBounds = L.latLngBounds([6, 67], [38, 98]);
+map.setMaxBounds(indiaBounds.pad(0.08));
 map.on('click', e => {
     const lat = Number(e.latlng.lat);
     const lon = normalizeLongitude(e.latlng.lng);
+    if (lat < 6 || lat > 38 || lon < 67 || lon > 98) return;
     place(lat, lon);
 });
 
@@ -181,6 +194,7 @@ function updateUI() {
 
 async function changeLanguage(lang) {
   currentLanguage = lang;
+  document.documentElement.lang = lang;
   localStorage.setItem('agrinet_language', lang);
   updateUI(); // Immediately shift static UI
   
@@ -331,7 +345,7 @@ function renderField(res) {
     `).join('');
   } else {
     $('f-health-score').textContent = '--';
-    $('f-health-status').textContent = window.t('status_unknown') || 'UNAVAILABLE';
+    $('f-health-status').textContent = h.status === 'no_land_detected' ? NO_LAND_TEXT[currentLanguage][0] : (window.t('status_unknown') || 'UNAVAILABLE');
     $('f-health-comps').innerHTML = '';
   }
 
@@ -364,6 +378,14 @@ $('btn-gen-adv').onclick = async () => {
 };
 
 async function regenerateAdvisory() {
+   if (String(currentFieldState?.land_cover?.class || '').toLowerCase().replaceAll('_', ' ') === 'water') {
+     currentAdvisory = null;
+     $('adv-loading').style.display = 'none';
+     $('adv-empty').textContent = NO_LAND_TEXT[currentLanguage][1];
+     $('adv-empty').style.display = 'block';
+     $('adv-content').style.display = 'none';
+     return;
+   }
    const expectedReqId = ++advisoryRequestId;
    
    $('adv-empty').style.display = 'none';
@@ -527,7 +549,7 @@ function renderAdvisory(a) {
   const container = $('adv-content');
   container.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom: 24px;">
         <h2 class="card-title" style="font-size: 22px; color: var(--primary);">${esc(window.t('localizedAdvisory'))}</h2>
-        <button class="btn btn-secondary" id="btn-speak">🔊 ${esc(window.t('listen'))}</button>
+        <button class="btn btn-secondary" id="btn-speak">${esc(window.t('listen'))}</button>
       </div>`;
   
   container.innerHTML += `<p style="font-size:16px; margin-bottom: 24px;">${esc(a.summary || '')}</p>`;
@@ -548,32 +570,39 @@ function renderAdvisory(a) {
   dynBox.appendChild(meta);
   container.appendChild(dynBox);
 
-  // Restore Voice feature handler bind since we rewrote innerHTML
-  $('btn-speak').onclick = () => {
-    if(!currentAdvisory) return;
-    speechSynthesis.cancel();
-    const actionsText = (a.immediate_actions||[]).map(c=>`${c.action}.`).join(' ');
-    const txt = `${a.summary || ''} ${actionsText}`;
-    const u = new SpeechSynthesisUtterance(txt);
-    u.lang = VOICE[currentLanguage] || 'en-IN';
-    speechSynthesis.speak(u);
-  };
+  $('btn-speak').onclick = speakAdvisory;
 }
 
 // Voice
 const VOICE = {en:'en-IN',hi:'hi-IN',ta:'ta-IN',te:'te-IN',bn:'bn-IN',mr:'mr-IN',pa:'pa-IN',gu:'gu-IN',kn:'kn-IN',ml:'ml-IN'};
-$('btn-speak').onclick = () => {
-  if(!currentAdvisory) return;
+function speakAdvisory() {
+  if (!currentAdvisory || !('speechSynthesis' in window)) return;
+  const collect = value => Array.isArray(value) ? value.flatMap(collect)
+    : value && typeof value === 'object' ? Object.values(value).flatMap(collect)
+    : typeof value === 'string' ? [value] : [];
+  const payload = collect(currentAdvisory).join('. ').trim();
+  if (!payload) return;
   speechSynthesis.cancel();
-  const a = currentAdvisory;
-  const textPayload = [
-    a.summary,
-    ...(a.recommendations||[]).map(c=>`${c.action}.`),
-  ].join('. ');
-  const u = new SpeechSynthesisUtterance(textPayload);
-  u.lang = VOICE[currentLanguage] || 'en-IN';
-  speechSynthesis.speak(u);
-};
+  const langPrefix = currentLanguage.toLowerCase();
+  const voice = speechSynthesis.getVoices().find(item => item.lang.toLowerCase().startsWith(langPrefix));
+  const chunks = payload.match(/[^.!?।]+[.!?।]*/g) || [payload];
+  let pending = '';
+  for (const sentence of chunks) {
+    if (pending.length + sentence.length > 220 && pending) {
+      queueSpeech(pending, voice);
+      pending = '';
+    }
+    pending += `${sentence} `;
+  }
+  if (pending.trim()) queueSpeech(pending, voice);
+}
+
+function queueSpeech(text, voice) {
+  const utterance = new SpeechSynthesisUtterance(text.trim());
+  utterance.lang = VOICE[currentLanguage] || 'en-IN';
+  if (voice) utterance.voice = voice;
+  speechSynthesis.speak(utterance);
+}
 
 // Crop Doctor
 $('dx-drop').onclick = () => $('dx-file').click();
@@ -643,7 +672,7 @@ function renderDx(d) {
     $('dx-diag').textContent = d.diagnosis;
     
     const list = (arr) => arr?.length ? arr.join(', ') : 'None';
-    $('dx-sym').textContent = list(d.observed_symptoms);
+  $('dx-sym').textContent = list(d.observed_symptoms);
     $('dx-act').textContent = list(d.recommended_action);
     $('dx-exp').textContent = d.expert_escalation || (window.t('dx_monitor') || 'Monitor closely.');
     

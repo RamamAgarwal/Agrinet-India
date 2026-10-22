@@ -182,6 +182,16 @@
     .grid { display: grid; }
     .grid-2 { grid-template-columns: 1fr 1fr; gap: 24px; }
     @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+    #field-content .grid-2 { grid-template-columns: minmax(0, 1fr); }
+    #field-content .card { box-shadow: var(--shadow-sm); }
+    .card { border: 1px solid var(--border); }
+    .btn { transition: transform .15s ease, box-shadow .15s ease, background .15s ease; }
+    .btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow); }
+    @media (max-width: 720px) {
+      header { padding: 12px 16px; }
+      .header-actions { gap: 8px; }
+      .nav-btn { padding: 10px 12px; }
+    }
     
     .grid-stats { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
 
@@ -303,6 +313,9 @@
       border-bottom: 1px solid var(--border);
     }
     .data-point:last-child { border-bottom: none; }
+    .diagnosis-point { display: block; padding: 14px 0; }
+    .diagnosis-point .dp-label { display: block; margin-bottom: 6px; }
+    .diagnosis-point .dp-val { display: block; white-space: normal; overflow-wrap: anywhere; line-height: 1.65; }
     
     .dp-label { color: var(--text-muted); font-size: 14px; font-weight: 500; }
     .dp-val { font-size: 15px; font-weight: 600; }
@@ -597,7 +610,7 @@
           <div class="advice-block">
             <div style="display:flex; justify-content:space-between; align-items:flex-start;">
               <h2 class="card-title" style="font-size: 22px; color: var(--primary);" data-i18n="localizedAdvisory">Localized Advisory</h2>
-              <button class="btn btn-secondary" id="btn-speak" data-i18n="listen">🔊 Listen</button>
+              <button class="btn btn-secondary" id="btn-speak" data-i18n="listen">Listen</button>
             </div>
             <p style="font-size: 16px; font-weight: 500; margin-top: 12px;" id="adv-summary"></p>
             <p style="color: var(--text-muted); margin-top: 8px;" id="adv-condition"></p>
@@ -670,8 +683,8 @@
               <h3 style="font-size: 18px; font-weight:600; margin-bottom: 8px;" id="dx-issue"></h3>
               <p style="margin-bottom: 16px;" id="dx-diag"></p>
               
-              <div class="data-point"><span class="dp-label" data-i18n="symptoms">Symptoms</span><span class="dp-val" id="dx-sym"></span></div>
-              <div class="data-point"><span class="dp-label" data-i18n="action">Action</span><span class="dp-val" id="dx-act"></span></div>
+              <div class="data-point diagnosis-point"><span class="dp-label" data-i18n="symptoms">Symptoms</span><span class="dp-val" id="dx-sym"></span></div>
+              <div class="data-point diagnosis-point"><span class="dp-label" data-i18n="action">Action</span><span class="dp-val" id="dx-act"></span></div>
               
               <div style="margin-top: 16px; padding: 12px; background: #fffbeb; border: 1px solid #fef3c7; border-radius: 6px; font-size: 13px;">
                 <strong style="color:#b45309;" data-i18n="expertEscalation">Expert Escalation:</strong> <span id="dx-exp"></span>
