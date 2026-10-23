@@ -45,6 +45,14 @@ class AdvisoryRequestV1(BaseModel):
     evidence: list
     lang: str = "en"
 
+
+async def _land_with_deadline(lat: float, lon: float) -> dict:
+    """Return EO results promptly when a remote Earth Engine request stalls."""
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(geo.analyze_land, lat, lon), timeout=12)
+    except asyncio.TimeoutError:
+        return {"source": "none", "land_cover": "unknown", "note": "Earth observation query timed out."}
+
 #
 # ─── MIDDLEWARE FOR FALLBACK HANDLING ────────────────────────
 #
@@ -86,7 +94,7 @@ async def analyze_v1(p: AnalyzeRequest):
 
     # Fetch data concurrently; catch failures gracefully inside ds modules
     land, wx, soil = await asyncio.gather(
-        asyncio.to_thread(geo.analyze_land, p.lat, p.lon),
+        _land_with_deadline(p.lat, p.lon),
         ds.weather(p.lat, p.lon),
         ds.soil(p.lat, p.lon)
     )
@@ -107,6 +115,10 @@ async def advisory_v1(r: AdvisoryRequestV1):
     """
     V1 Advisory: Gemini reasoning over the structured Field State and Evidence.
     """
+    land_class = str(r.field_state.get("land_cover", {}).get("class", "")).lower().replace("_", " ")
+    if land_class in {"water", "water body", "water bodies"}:
+        return {"summary": "No land detected at this location.", "field_condition": "AI advisory is unavailable for water bodies.", "risks": [], "recommendations": [], "regenerative_actions": [], "crop_options": [], "confidence_note": "No land detected."}
+
     if not ai.is_available():
         # Fallback if Gemini key is missing
         return {
@@ -144,6 +156,10 @@ async def diagnose_v1(
     data = await image.read()
     if len(data) > 8_000_000:
         raise HTTPException(413, "Image too large (max 8 MB)")
+    if not data:
+        raise HTTPException(400, "Image is empty")
+    if image.content_type not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
+        raise HTTPException(415, "Unsupported image format")
         
     context = None
     if field_context_json:
@@ -220,7 +236,7 @@ def health(): return {"ok": True, "ai_configured": ai.is_available()}
 @app.post("/api/analyze")
 async def analyze(p: Plot):
     if not (6 <= p.lat <= 38 and 67 <= p.lon <= 98): raise HTTPException(400, "Location is outside India")
-    land, wx, soil = await asyncio.gather(asyncio.to_thread(geo.analyze_land, p.lat, p.lon), ds.weather(p.lat, p.lon), ds.soil(p.lat, p.lon))
+    land, wx, soil = await asyncio.gather(_land_with_deadline(p.lat, p.lon), ds.weather(p.lat, p.lon), ds.soil(p.lat, p.lon))
     return {"location": {"lat": p.lat, "lon": p.lon}, "land": land, "weather": wx, "soil": soil}
 
 class AdvisoryReq(BaseModel):

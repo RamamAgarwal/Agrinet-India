@@ -89,7 +89,15 @@ def ee_analysis(lat, lon, days=180):
     pt = ee.Geometry.Point([lon, lat]); end = dt.date.today(); start = end - dt.timedelta(days=days)
     dw = (ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1").filterBounds(pt)
           .filterDate(str(end - dt.timedelta(days=90)), str(end)).select("label").mode())
-    lab = dw.reduceRegion(ee.Reducer.first(), pt, 10).get("label").getInfo()
+    label_value = dw.reduceRegion(ee.Reducer.first(), pt, 10).get("label")
+    probability_bands = ["water", "trees", "grass", "flooded_vegetation", "crops", "shrub_and_scrub", "built", "bare", "snow_and_ice"]
+    confidence_img = (ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1").filterBounds(pt)
+                      .filterDate(str(end - dt.timedelta(days=90)), str(end))
+                      .select(probability_bands).mean().reduce(ee.Reducer.max()))
+    confidence_value = confidence_img.reduceRegion(ee.Reducer.first(), pt, 10).get("max")
+    ee_values = ee.Dictionary({"label": label_value, "confidence": confidence_value}).getInfo()
+    lab = ee_values.get("label")
+    confidence = ee_values.get("confidence")
     s2 = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED").filterBounds(pt).filterDate(str(start), str(end))
           .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 30)))
     def f(img):
@@ -108,7 +116,8 @@ def ee_analysis(lat, lon, days=180):
     return {"series": ndvi_series, "ndwi_series": ndwi_series,
             "source": "earth_engine_live", "resolution": "10 m Dynamic World / Sentinel-2",
             "observed": str(end), "land_cover_id": int(lab), "land_cover": LABELS["dynamic_world"][str(int(lab))],
-            "confidence": None, "is_cropland": int(lab) in LABELS["dynamic_world_cropland_ids"]}
+            "confidence": round(float(confidence), 3) if confidence is not None else None,
+            "is_cropland": int(lab) in LABELS["dynamic_world_cropland_ids"]}
 
 def analyze_land(lat, lon):
     """Routing: Planet data if it exists nearby, otherwise Earth Engine. NDVI/NDWI trends from EE when available."""

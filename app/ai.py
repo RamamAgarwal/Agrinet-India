@@ -32,36 +32,20 @@ def _json(resp):
     return json.loads(t)
 
 def _generate(**kw):
-    import time
-    models = [
-        "gemini-3.8-flash",
-        "gemini-3.7-flash",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash"
-    ]
+    # Use the configured model once. Chaining retired/unavailable model IDs and
+    # retrying every failure made a single UI request wait through many timeouts.
+    models = [MODEL]
     last = None
     for m in models:
         # Retry ONCE for 503/429 (max 2 attempts per model)
-        for attempt in range(2):
+        for attempt in range(1):
             try:
                 return client().models.generate_content(model=m, **kw)
             except Exception as e:
                 last = e
-                e_str = str(e)
-                is_transient = any(c in e_str for c in ("503", "429", "UNAVAILABLE", "TOO_MANY_REQUESTS"))
+                print(f"[AI] Model {m} failed on attempt {attempt + 1}")
                 
-                status_cat = "Transient (503/429)" if is_transient else "Non-transient/Other"
-                print(f"[AI] Model {m} attempt {attempt + 1} failed: {status_cat}")
-                
-                if is_transient:
-                    if attempt == 0:
-                        time.sleep(2)  # brief wait before retry ONCE
-                        continue
-                    else:
-                        break  # exhausted retries for this model, move to next
-                else:
-                    # Non-transient: move to next model immediately (do not waste retries)
-                    break
+                break
     if last:
         raise last
     raise RuntimeError("No models succeeded")
@@ -171,7 +155,7 @@ def advisory(ctx: dict, lang: str):
     L = LANGS.get(lang, "English")
     prompt = f"""You are an agronomy advisor for small and marginal farmers in India. Use ONLY the data below; if data is missing or
 uncertain, say so and do not invent numbers. Recommend regenerative, low-cost, locally practical options. If the land is not cropland,
-say so and advise accordingly. Write all text values in {L} (simple words, no jargon). Keep JSON keys in English.
+say so and advise accordingly. Write every text value only in {L}, preferably in its native script. Do not include English alongside the translation. Keep JSON keys in English.
 DATA: {json.dumps(ctx, ensure_ascii=False)}
 {ADVISORY_SCHEMA_V2}"""
     r = _generate(contents=prompt,
@@ -203,7 +187,7 @@ RULES:
 4. If data is missing or uncertain, acknowledge it. Do NOT fabricate missing measurements.
 5. Recommend regenerative, low-cost, locally practical options.
 6. If the land is not cropland, say so and advise accordingly.
-7. Write all text values in {L} (simple words, no jargon).
+7. Write every text value only in {L} (simple words, no jargon), preferably in its native script. Do not include English alongside the translation.
 8. Keep all JSON keys in English.
 9. The Field Health Score is deterministic (computed by the system). You may explain it but do NOT recalculate it.
 10. Each recommendation must have a clear WHY linked to specific evidence.
@@ -262,6 +246,8 @@ DIAGNOSIS_SCHEMA = """Return ONLY valid JSON:
 }
 If the image is not a plant or is too unclear, set healthy=false, likely_issue="cannot determine" and explain in observed_symptoms."""
 
+_diagnosis_cache = {}
+
 def diagnose(image: bytes, mime: str, lang: str, crop: str = "", field_context: dict = None):
     """Multimodal crop disease assessment with optional field context."""
     L = LANGS.get(lang, "English")
@@ -277,11 +263,16 @@ FIELD CONTEXT (use to provide more specific advice):
     prompt = f"""You are a plant pathologist helping an Indian farmer. Examine this crop photo{hint}.
 {context_section}
 {DIAGNOSIS_SCHEMA}
-Write all text values in {L}. Keep JSON keys in English."""
+Write every user-facing text value only in {L}, preferably using its native script. Do not include English alongside the translation; keep JSON keys and standard crop/scientific abbreviations in English."""
 
+    import hashlib
+    cache_context = json.dumps(field_context or {}, sort_keys=True, ensure_ascii=False, default=str)
+    cache_key = hashlib.sha256(image + lang.encode() + crop.encode() + cache_context.encode()).hexdigest()
+    if cache_key in _diagnosis_cache:
+        return dict(_diagnosis_cache[cache_key])
     r = _generate(
         contents=[types.Part.from_bytes(data=image, mime_type=mime), prompt],
-        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.2))
+        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0, seed=0))
     result = _safe_parse(r)
     # Ensure backward compatibility
     if "likely_issue" not in result:
@@ -292,6 +283,9 @@ Write all text values in {L}. Keep JSON keys in English."""
         result["expert_escalation"] = result.get("when_to_seek_expert", "")
     if "observed_symptoms" not in result:
         result["observed_symptoms"] = result.get("symptoms_seen", [])
+    _diagnosis_cache[cache_key] = dict(result)
+    if len(_diagnosis_cache) > 64:
+        _diagnosis_cache.pop(next(iter(_diagnosis_cache)))
     return result
 
 
