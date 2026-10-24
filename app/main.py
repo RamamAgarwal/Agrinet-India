@@ -28,6 +28,12 @@ class UJSONResponse(JSONResponse):
             separators=(",", ":"),
         ).encode("utf-8")
 
+from dotenv import load_dotenv
+
+# Local `uvicorn app.main:app` runs do not read .env on their own; without this, EE_PROJECT and
+# GEMINI_API_KEY are unset and every live location falls back to "unknown". Real env vars take precedence.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
+
 from . import geo, data_sources as ds, ai, field_state as fs, field_health as fh, scenarios
 
 log = logging.getLogger("agrinet")

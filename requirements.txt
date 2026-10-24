@@ -10,3 +10,4 @@ joblib
 httpx
 google-genai
 earthengine-api
+python-dotenv==1.2.*
