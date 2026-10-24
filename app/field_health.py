@@ -195,6 +195,8 @@ def compute_field_health(land: dict, weather: dict, soil: dict) -> dict:
     cover = str(land.get("land_cover", "")).lower().replace("_", " ")
     if cover in {"water", "water body", "water bodies"}:
         return {"score": None, "status": "no_land_detected", "components": {key: None for key in WEIGHTS}, "available_components": 0}
+    if cover in {"", "unknown"} or land.get("source") == "none":
+        return {"score": None, "status": "unavailable", "components": {key: None for key in WEIGHTS}, "available_components": 0}
     components = {}
     component_fns = {
         "vegetation": (_vegetation_score, land),

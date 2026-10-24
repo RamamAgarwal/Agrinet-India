@@ -12,6 +12,8 @@ let currentAnalysisResponse = null;
 let currentFieldState = null;
 let currentAdvisory = null;
 let lastDxResult = null; // store to know if dx exists
+let advisoryAbortController = null;
+let dxAbortController = null;
 
 window.localizeEnum = function(val, category) {
     if (val === undefined || val === null) return '';
@@ -193,19 +195,23 @@ function updateUI() {
 }
 
 async function changeLanguage(lang) {
+  const refreshAdvisory = Boolean(currentAdvisory) || $('adv-loading').style.display !== 'none';
+  const refreshDiagnosis = Boolean(lastDxResult) || $('dx-loading').style.display !== 'none';
+  ++advisoryRequestId;
+  ++dxRequestId;
+  advisoryAbortController?.abort();
+  dxAbortController?.abort();
+  if (refreshAdvisory) currentAdvisory = null;
+  if (refreshDiagnosis) lastDxResult = null;
   currentLanguage = lang;
   document.documentElement.lang = lang;
   localStorage.setItem('agrinet_language', lang);
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
   updateUI(); // Immediately shift static UI
   
-  // Triger re-generation if context exists
-  if (currentAdvisory) {
-     await regenerateAdvisory();
-  }
-  
-  if (lastDxResult && $('dx-file').files[0]) {
-     await regenerateDx();
-  }
+  // Start independent refreshes without blocking the language selector or one another.
+  if (refreshAdvisory && currentFieldState) void regenerateAdvisory();
+  if (refreshDiagnosis && $('dx-file').files[0]) void regenerateDx();
 }
 
 
@@ -220,13 +226,25 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
 });
 
 // API Helpers
-async function apiPost(url, body, isForm=false) {
-  const opts = { method: 'POST', body: isForm ? body : JSON.stringify(body) };
+async function apiPost(url, body, isForm=false, signal=null) {
+  const controller = new AbortController();
+  const abortRequest = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener('abort', abortRequest, { once: true });
+  }
+  const timeout = setTimeout(() => controller.abort(), 35000);
+  const opts = { method: 'POST', body: isForm ? body : JSON.stringify(body), signal: controller.signal };
   if(!isForm) opts.headers = { 'Content-Type': 'application/json' };
-  const r = await fetch(url, opts);
-  const j = await r.json();
-  if(!r.ok) throw new Error(j.detail || r.statusText);
-  return j;
+  try {
+    const r = await fetch(url, opts);
+    const j = await r.json();
+    if(!r.ok) throw new Error(j.detail || r.statusText);
+    return j;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener('abort', abortRequest);
+  }
 }
 
 async function apiGet(url) {
@@ -285,6 +303,9 @@ $('btn-analyze').onclick = async () => {
 
 async function analyzeField(req) {
   req.lang = currentLanguage;
+  ++advisoryRequestId;
+  advisoryAbortController?.abort();
+  currentAdvisory = null;
   $('btn-analyze').disabled = true;
     $('btn-analyze').textContent = window.t('analyzingBtn');
   
@@ -328,6 +349,9 @@ function renderField(res) {
   $('f-geohash').textContent = `${window.t('geohash')} ${fs.field.geohash}`;
   $('f-location').textContent = `${fs.field.lat.toFixed(4)}, ${fs.field.lon.toFixed(4)}`;
   $('f-crop').textContent = fs.field.crop ? `${window.t('declaredCrop')} ${esc(fs.field.crop)}` : window.t('unknownCrop');
+
+  const isWater = String(fs.land_cover.class || '').toLowerCase().replaceAll('_', ' ') === 'water';
+  $('btn-gen-adv').disabled = isWater;
 
   const h = fs.health;
   const ring = $('f-health-ring');
@@ -387,6 +411,8 @@ async function regenerateAdvisory() {
      return;
    }
    const expectedReqId = ++advisoryRequestId;
+   advisoryAbortController?.abort();
+   advisoryAbortController = new AbortController();
    
    $('adv-empty').style.display = 'none';
    
@@ -407,7 +433,7 @@ async function regenerateAdvisory() {
       field_state: currentAnalysisResponse.field_state,
       evidence: currentAnalysisResponse.evidence,
       lang: currentLanguage
-    });
+    }, false, advisoryAbortController.signal);
     
     if (expectedReqId !== advisoryRequestId) return; // Stale protection
     currentAdvisory = adv;
@@ -623,6 +649,8 @@ $('btn-dx').onclick = async () => {
 
 async function regenerateDx() {
   const expectedReqId = ++dxRequestId;
+  dxAbortController?.abort();
+  dxAbortController = new AbortController();
   const f = $('dx-file').files[0];
     
   $('dx-empty').style.display = 'none';
@@ -637,14 +665,15 @@ async function regenerateDx() {
   $('dx-loading').style.display = 'block';
   $('btn-dx').disabled = true;
   
-  const fd = new FormData();
-  fd.append('image', f);
-  fd.append('lang', currentLanguage);
-  fd.append('crop', $('dx-crop').value);
-  if(currentFieldState) fd.append('field_context_json', JSON.stringify(currentFieldState));
-  
   try {
-    const d = await apiPost('/api/v1/diagnose', fd, true);
+    const fd = new FormData();
+    const optimizedImage = await optimizeDiagnosisImage(f);
+    if (expectedReqId !== dxRequestId) return;
+    fd.append('image', optimizedImage);
+    fd.append('lang', currentLanguage);
+    fd.append('crop', $('dx-crop').value);
+    if(currentFieldState) fd.append('field_context_json', JSON.stringify(currentFieldState));
+    const d = await apiPost('/api/v1/diagnose', fd, true, dxAbortController.signal);
     if (expectedReqId !== dxRequestId) return; 
     
     lastDxResult = d;
@@ -660,6 +689,23 @@ async function regenerateDx() {
        $('dx-res').style.opacity = '1';
        $('btn-dx').disabled = false;
     }
+  }
+}
+
+async function optimizeDiagnosisImage(file) {
+  if (!window.createImageBitmap || (file.size < 6_000_000 && ['image/jpeg', 'image/png', 'image/webp'].includes(file.type))) return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, 2000 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.88));
+    return blob ? new File([blob], 'crop-photo.jpg', { type: 'image/jpeg' }) : file;
+  } catch (error) {
+    return file;
   }
 }
 
