@@ -22,6 +22,10 @@
 4. **Static front‑end** – the `static/` directory only contains a placeholder `index.html`; UI enhancements are pending.
 5. **Logging** – only a simple middleware placeholder exists; structured logging and request tracing are not implemented.
 6. **Configuration validation** – missing/invalid env variables raise generic `RuntimeError` rather than a clean startup check.
+7. **Earth Engine IAM** – the account used locally lacks `serviceusage.services.use` on the `EE_PROJECT`; without the
+   `roles/serviceusage.serviceUsageConsumer` role every non-Planet location returns no vegetation/EO confidence.
+8. **Gemini free-tier quota** – the free tier allows ~20 requests/day per model; once exhausted, advisory and Crop Doctor
+   return a quota message. Use a billed key for demos.
 
 ## Outstanding Tasks (Prioritized)
 | Priority | Task | Description |

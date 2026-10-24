@@ -4,6 +4,10 @@ Interoperable agricultural network with field intelligence, health scoring,
 and evidence-grounded Gemini AI advisory.
 """
 import asyncio
+import logging
+import threading
+import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
@@ -24,9 +28,20 @@ class UJSONResponse(JSONResponse):
             separators=(",", ":"),
         ).encode("utf-8")
 
-from . import geo, data_sources as ds, ai, field_state as fs, scenarios
+from . import geo, data_sources as ds, ai, field_state as fs, field_health as fh, scenarios
 
-app = FastAPI(title="AgriNet India", version="0.1", description="Interoperable agro-advisory API (digital public good prototype)", default_response_class=UJSONResponse)
+log = logging.getLogger("agrinet")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Warm up Earth Engine in the background so the first live analysis is not slowed by its init."""
+    threading.Thread(target=geo.warm_up, name="ee-warmup", daemon=True).start()
+    yield
+
+
+app = FastAPI(title="AgriNet India", version="0.1", description="Interoperable agro-advisory API (digital public good prototype)", default_response_class=UJSONResponse, lifespan=lifespan)
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
 #
@@ -46,10 +61,14 @@ class AdvisoryRequestV1(BaseModel):
     lang: str = "en"
 
 
+QUOTA_MESSAGE = "The Gemini API quota for this key is used up. Please try again later or configure a key with a higher quota."
+
+
 async def _land_with_deadline(lat: float, lon: float) -> dict:
     """Return EO results promptly when a remote Earth Engine request stalls."""
     try:
-        return await asyncio.wait_for(asyncio.to_thread(geo.analyze_land, lat, lon), timeout=12)
+        # geo bounds its Earth Engine query itself (and keeps Planet results); this is a final safety net.
+        return await asyncio.wait_for(asyncio.to_thread(geo.analyze_land, lat, lon), timeout=geo.EE_TIMEOUT_S + 6)
     except asyncio.TimeoutError:
         return {"source": "none", "land_cover": "unknown", "note": "Earth observation query timed out."}
 
@@ -58,8 +77,12 @@ async def _land_with_deadline(lat: float, lon: float) -> dict:
 #
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
-    # This middleware could be extended for logging, timing, etc.
+    start = time.perf_counter()
     response = await call_next(request)
+    elapsed = time.perf_counter() - start
+    response.headers["X-Process-Time"] = f"{elapsed:.3f}"
+    if request.url.path.startswith("/api/"):
+        log.info("%s %s -> %s in %.2fs", request.method, request.url.path, response.status_code, elapsed)
     return response
 
 #
@@ -115,8 +138,10 @@ async def advisory_v1(r: AdvisoryRequestV1):
     """
     V1 Advisory: Gemini reasoning over the structured Field State and Evidence.
     """
-    land_class = str(r.field_state.get("land_cover", {}).get("class", "")).lower().replace("_", " ")
-    if land_class in {"water", "water body", "water bodies"}:
+    land_cover = r.field_state.get("land_cover") or {}
+    health = r.field_state.get("health") or {}
+    cover_class = land_cover.get("class") if isinstance(land_cover, dict) else land_cover
+    if fh.is_water_cover(cover_class) or health.get("status") == "no_land_detected":
         return {"summary": "No land detected at this location.", "field_condition": "AI advisory is unavailable for water bodies.", "risks": [], "recommendations": [], "regenerative_actions": [], "crop_options": [], "confidence_note": "No land detected."}
 
     if not ai.is_available():
@@ -136,7 +161,7 @@ async def advisory_v1(r: AdvisoryRequestV1):
     try:
         return await asyncio.wait_for(
             asyncio.to_thread(ai.advisory_v2, compact_fs, r.evidence, r.lang),
-            timeout=25,
+            timeout=30,
         )
     except asyncio.TimeoutError:
         return {
@@ -148,14 +173,42 @@ async def advisory_v1(r: AdvisoryRequestV1):
         }
     except Exception as e:
         # Don't crash; return a graceful fallback advisory
-        print(f"Gemini error: {e}")
+        log.warning("Gemini advisory error: %s", e)
+        quota = ai.is_quota_error(e)
         return {
-            "summary": "AI reasoning temporarily unavailable.",
+            "summary": QUOTA_MESSAGE if quota else "AI reasoning temporarily unavailable.",
             "field_condition": "Service error occurred.",
-            "risks": [{"risk": "Service Connectivity", "reason": "Could not reach AI provider.", "evidence_ids": []}],
+            "risks": [{"risk": "Service Connectivity", "reason": "AI provider quota exhausted." if quota else "Could not reach AI provider.", "evidence_ids": []}],
             "recommendations": [], "regenerative_actions": [], "crop_options": [],
             "confidence_note": "Fallback state activated due to generation error."
         }
+
+SUPPORTED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif"}
+
+
+def _image_mime(data: bytes, declared: str | None) -> str | None:
+    """Return the image MIME type from its magic bytes, falling back to the declared type.
+
+    Phones often upload HEIC photos or send an empty/octet-stream content type; sniffing the
+    bytes keeps those working instead of rejecting them. Returns None for unsupported files.
+    """
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[4:8] == b"ftyp":
+        brand = data[8:12]
+        if brand in (b"heic", b"heix", b"hevc", b"heim", b"heis"):
+            return "image/heic"
+        if brand in (b"mif1", b"msf1", b"heif"):
+            return "image/heif"
+    declared = (declared or "").lower()
+    return declared if declared in SUPPORTED_IMAGE_TYPES else None
+
 
 @app.post("/api/v1/diagnose")
 async def diagnose_v1(
@@ -172,9 +225,10 @@ async def diagnose_v1(
         raise HTTPException(413, "Image too large (max 8 MB)")
     if not data:
         raise HTTPException(400, "Image is empty")
-    if image.content_type not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
+    mime = _image_mime(data, image.content_type)
+    if mime is None:
         raise HTTPException(415, "Unsupported image format")
-        
+
     context = None
     if field_context_json:
         import json
@@ -185,8 +239,8 @@ async def diagnose_v1(
             
     try:
         return await asyncio.wait_for(
-            asyncio.to_thread(ai.diagnose, data, image.content_type or "image/jpeg", lang, crop, context),
-            timeout=30,
+            asyncio.to_thread(ai.diagnose, data, mime, lang, crop, context),
+            timeout=35,
         )
     except asyncio.TimeoutError:
         return {
@@ -198,11 +252,11 @@ async def diagnose_v1(
             "expert_escalation": "Please consult a local agricultural expert if the issue persists."
         }
     except Exception as e:
-        print(f"Gemini error: {e}")
+        log.warning("Gemini diagnosis error: %s", e)
         return {
             "healthy": False,
             "likely_issue": "AI Diagnosis Unavailable",
-            "diagnosis": "Could not complete diagnosis due to service error.",
+            "diagnosis": QUOTA_MESSAGE if ai.is_quota_error(e) else "Could not complete diagnosis due to service error.",
             "confidence": "low",
             "observed_symptoms": [], "recommended_action": [],
             "expert_escalation": "Please consult a local expert."

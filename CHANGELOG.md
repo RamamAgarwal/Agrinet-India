@@ -1,6 +1,22 @@
 # CHANGELOG.md – Summary of Significant Changes
 
 ## [Unreleased]
+- **Field Intelligence** now opens at the Field Health score: views always scroll to the top when switched.
+- **Earth Engine**: Dynamic World, Sentinel-2 NDVI/NDWI (cloud-masked) and the MODIS land/water mask are fetched in one
+  `getInfo()` round trip; results are cached per geohash-7 cell, a slow query no longer discards Planet results, and a
+  failed EE init is retried after 5 minutes instead of being disabled until restart. EE is warmed up at startup.
+- **Water bodies**: open sea/coast points (no Dynamic World scene) are classified via the MODIS water mask or a spectral
+  NDWI/NDVI test; they report "No land detected" and AI advisory is disabled for them (UI and API).
+- Fixed PlanetScope NDWI band indices (Green B4 / NIR B8).
+- **Gemini latency/reliability**: minimal thinking level (with automatic fallback if a model rejects it), 28 s HTTP
+  timeout, one retry on 5xx/rate-limit errors (not on exhausted daily quota), concise output limits, larger output token
+  budget (fixes truncated-JSON failures), compact evidence in prompts, and an advisory cache per input + language.
+- **Crop Doctor**: photos are downscaled to 1280 px JPEG before upload; HEIC/HEIF and files with a missing MIME type are
+  identified from their bytes instead of being rejected; diagnosis fields are normalised.
+- **Language switching**: advisory/diagnosis stay visible while a translation loads, results are cached per language,
+  rapid switches are debounced, and modal `alert()`s were replaced by non-blocking notices. Audio has a Stop toggle,
+  waits for voices to load, reads only readable text in the advisory's language, and warns when no voice is installed.
+- Request timing is logged by the HTTP middleware; `print` calls replaced with `logging`.
 - Initial project scaffolding (FastAPI server, layered architecture).
 - Implemented deterministic field‑intelligence pipeline (`field_state`, `geo`, `data_sources`).
 - Defined immutable **Evidence Bundle** JSON schema.
