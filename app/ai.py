@@ -9,13 +9,17 @@ Responsibilities:
 Gemini receives structured evidence and field state — NOT raw coordinates.
 The deterministic Field Health Score is computed by the backend, not Gemini.
 """
-import os, json, traceback
+import os, json, time, hashlib, logging
 from google import genai
-from google.genai import types
+from google.genai import types, errors
 
+log = logging.getLogger("agrinet.ai")
 MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 LANGS = {"en": "English", "hi": "Hindi", "ta": "Tamil", "te": "Telugu", "bn": "Bengali", "mr": "Marathi",
          "pa": "Punjabi", "gu": "Gujarati", "kn": "Kannada", "ml": "Malayalam"}
+# Per-request HTTP timeout. Without it a stalled call keeps its worker thread busy long after the
+# API deadline, and repeated language switches exhaust the thread pool so the whole UI hangs.
+HTTP_TIMEOUT_MS = 28_000
 _client = None
 def client():
     global _client
@@ -23,32 +27,59 @@ def client():
         key = os.getenv("GEMINI_API_KEY")
         if not key:
             raise RuntimeError("GEMINI_API_KEY not set")
-        _client = genai.Client(api_key=key) if key else genai.Client(vertexai=True,
-            project=os.getenv("GOOGLE_CLOUD_PROJECT"), location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"))
+        _client = genai.Client(api_key=key, http_options=types.HttpOptions(timeout=HTTP_TIMEOUT_MS))
     return _client
 
 def _json(resp):
     t = resp.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```")
     return json.loads(t)
 
-def _generate(**kw):
-    # Use the configured model once. Chaining retired/unavailable model IDs and
-    # retrying every failure made a single UI request wait through many timeouts.
-    models = [MODEL]
-    last = None
-    for m in models:
-        # Retry ONCE for 503/429 (max 2 attempts per model)
-        for attempt in range(1):
-            try:
-                return client().models.generate_content(model=m, **kw)
-            except Exception as e:
-                last = e
-                print(f"[AI] Model {m} failed on attempt {attempt + 1}")
-                
-                break
-    if last:
-        raise last
-    raise RuntimeError("No models succeeded")
+def _thinking_options(model: str) -> list[types.ThinkingConfig | None]:
+    """Thinking configs to try, cheapest first. Thinking tokens count against max_output_tokens, so
+    unbounded thinking both slows responses and truncates the JSON (a common parse failure)."""
+    m = model.lower()
+    if "2.5" in m:
+        return [types.ThinkingConfig(thinking_budget=128 if "pro" in m else 0), None]
+    low = [types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW), None]
+    return low if "pro" in m else [types.ThinkingConfig(thinking_level=types.ThinkingLevel.MINIMAL)] + low
+
+_thinking_choice = 0  # index into _thinking_options(MODEL); advanced when the model rejects an option
+
+def is_quota_error(e: Exception) -> bool:
+    """True for a 429 caused by an exhausted (e.g. daily free-tier) quota, which retrying cannot fix."""
+    return isinstance(e, errors.ClientError) and e.code == 429 and "perday" in str(e).lower().replace(" ", "")
+
+def _generate(contents, config: types.GenerateContentConfig | None = None):
+    """Call the configured model with the lowest accepted thinking level, retrying once on transient errors.
+
+    If the model rejects a thinking config (HTTP 400), the next, less restrictive option is used
+    for this and all later calls.
+    """
+    global _thinking_choice
+    options = _thinking_options(MODEL)
+    user_thinking = config is not None and config.thinking_config is not None
+    retried = False
+    while True:
+        cfg = config
+        if config is not None and not user_thinking:
+            cfg = config.model_copy(update={"thinking_config": options[min(_thinking_choice, len(options) - 1)]})
+        try:
+            return client().models.generate_content(model=MODEL, contents=contents, config=cfg)
+        except errors.ClientError as e:
+            if (e.code == 400 and cfg is not None and cfg.thinking_config is not None and not user_thinking
+                    and "think" in str(e).lower() and _thinking_choice < len(options) - 1):
+                _thinking_choice += 1
+                log.warning("Model %s rejected thinking config (%s); trying %s", MODEL, e.message, options[_thinking_choice])
+                continue
+            if e.code == 429 and not retried and not is_quota_error(e):
+                retried = True
+                log.warning("Gemini %s rate-limited; retrying once", MODEL); time.sleep(1.0); continue
+            raise
+        except errors.ServerError as e:
+            if not retried:
+                retried = True
+                log.warning("Gemini %s returned %s; retrying once", MODEL, e.code); time.sleep(1.0); continue
+            raise
 
 # ──────────────────────────────────────────────
 # ENHANCED ADVISORY SCHEMA (structured reasoning)
@@ -148,7 +179,11 @@ ADVISORY_SCHEMA_V2 = """Return ONLY valid JSON matching this exact schema:
 }
 
 If any section has no relevant evidence, return an empty list [] for it. Do NOT fabricate missing measurements.
+Be concise: at most 3 items per list, and keep each text value to one or two short sentences.
 """
+
+ADVISORY_CONFIG = dict(response_mime_type="application/json", temperature=0.3, max_output_tokens=8192)
+_advisory_cache: dict = {}
 
 def advisory(ctx: dict, lang: str):
     """Legacy advisory endpoint — works with raw context dict."""
@@ -159,7 +194,7 @@ say so and advise accordingly. Write every text value only in {L}, preferably in
 DATA: {json.dumps(ctx, ensure_ascii=False)}
 {ADVISORY_SCHEMA_V2}"""
     r = _generate(contents=prompt,
-        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.3, max_output_tokens=4096))
+        config=types.GenerateContentConfig(**ADVISORY_CONFIG))
     return _safe_parse(r)
 
 
@@ -172,8 +207,14 @@ def advisory_v2(field_state_compact: dict, evidence: list, lang: str):
         lang: language code
     """
     L = LANGS.get(lang, "English")
-    evidence_text = json.dumps(evidence, ensure_ascii=False, default=str)
+    # Only the fields Gemini reasons over; translation keys and badges just add prompt tokens.
+    prompt_evidence = [{k: e.get(k) for k in ("id", "indicator", "value", "unit", "source", "date", "interpretation")}
+                       for e in evidence if isinstance(e, dict)]
+    evidence_text = json.dumps(prompt_evidence, ensure_ascii=False, default=str)
     field_text = json.dumps(field_state_compact, ensure_ascii=False, default=str)
+    cache_key = hashlib.sha256(f"{MODEL}|{lang}|{field_text}|{evidence_text}".encode()).hexdigest()
+    if cache_key in _advisory_cache:
+        return json.loads(_advisory_cache[cache_key])
     valid_evidence_ids_str = ", ".join([e.get("id", "") for e in evidence if "id" in e])
 
     prompt = f"""You are an agronomy advisor for small and marginal farmers in India.
@@ -203,7 +244,7 @@ EVIDENCE BUNDLE:
 {ADVISORY_SCHEMA_V2}"""
 
     r = _generate(contents=prompt,
-        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.3, max_output_tokens=4096))
+        config=types.GenerateContentConfig(**ADVISORY_CONFIG))
     
     parsed = _safe_parse(r)
     
@@ -225,6 +266,11 @@ EVIDENCE BUNDLE:
                 validate_ids(item)
 
     validate_ids(parsed)
+    # Cache only real advisories; parser fallbacks should be retried.
+    if isinstance(parsed, dict) and "_raw" not in parsed:
+        _advisory_cache[cache_key] = json.dumps(parsed, ensure_ascii=False)
+        if len(_advisory_cache) > 128:
+            _advisory_cache.pop(next(iter(_advisory_cache)))
     return parsed
 
 # ──────────────────────────────────────────────
@@ -244,7 +290,8 @@ DIAGNOSIS_SCHEMA = """Return ONLY valid JSON:
   "expert_escalation": "str (when to seek expert help)",
   "disclaimer": "AI-assisted crop disease assessment — not laboratory confirmation. Verify with agricultural extension officer."
 }
-If the image is not a plant or is too unclear, set healthy=false, likely_issue="cannot determine" and explain in observed_symptoms."""
+If the image is not a plant or is too unclear, set healthy=false, likely_issue="cannot determine" and explain in observed_symptoms.
+"healthy" must be a JSON boolean (true/false). Be concise: at most 4 items per list, one short sentence each."""
 
 _diagnosis_cache = {}
 
@@ -275,14 +322,13 @@ FIELD CONTEXT (use to provide more specific advice):
 {DIAGNOSIS_SCHEMA}
 Write every user-facing text value only in {L}, preferably using its native script. Do not include English alongside the translation; keep JSON keys and standard crop/scientific abbreviations in English."""
 
-    import hashlib
     cache_context = json.dumps(compact_context, sort_keys=True, ensure_ascii=False, default=str)
     cache_key = hashlib.sha256(image + lang.encode() + crop.encode() + cache_context.encode()).hexdigest()
     if cache_key in _diagnosis_cache:
         return dict(_diagnosis_cache[cache_key])
     r = _generate(
         contents=[types.Part.from_bytes(data=image, mime_type=mime), prompt],
-        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0, seed=0, max_output_tokens=3072))
+        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0, seed=0, max_output_tokens=4096))
     result = _safe_parse(r)
     cacheable = isinstance(result, dict) and bool(result.get("diagnosis")) and "_raw" not in result
     if not isinstance(result, dict):
@@ -303,8 +349,12 @@ Write every user-facing text value only in {L}, preferably using its native scri
         result["likely_issue"] = result.get("diagnosis", "unknown")
     if not result.get("diagnosis"):
         result["diagnosis"] = result.get("summary", "The image could not be assessed clearly. Please try another photo.")
-    if not isinstance(result.get("healthy"), bool):
+    if isinstance(result.get("healthy"), str):
+        result["healthy"] = result["healthy"].strip().lower() in ("true", "yes", "1")
+    elif not isinstance(result.get("healthy"), bool):
         result["healthy"] = False
+    if isinstance(result.get("confidence"), str):
+        result["confidence"] = result["confidence"].strip().lower()
     if result.get("confidence") not in ("low", "medium", "high"):
         result["confidence"] = "low"
     if "recommended_action" not in result:
@@ -317,6 +367,10 @@ Write every user-facing text value only in {L}, preferably using its native scri
         result["observed_symptoms"] = result.get("symptoms_seen", [])
     if not isinstance(result["observed_symptoms"], list):
         result["observed_symptoms"] = [str(result["observed_symptoms"])] if result["observed_symptoms"] else []
+    # The UI joins these lists as text, so flatten any object items the model returns.
+    for k in ("observed_symptoms", "recommended_action"):
+        result[k] = [x if isinstance(x, str) else " ".join(str(v) for v in x.values()) if isinstance(x, dict) else str(x)
+                     for x in result[k] if x]
     result.setdefault("expert_escalation", result.get("when_to_seek_expert", "Consult a local agricultural expert if symptoms continue."))
     # Do not cache provider/parser fallback text; later attempts may succeed.
     if cacheable:

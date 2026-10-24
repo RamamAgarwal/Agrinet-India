@@ -75,6 +75,50 @@ const NO_LAND_TEXT = {
   kn: ['ಭೂಮಿ ಪತ್ತೆಯಾಗಿಲ್ಲ', 'ಜಲಮೂಲಗಳಿಗೆ AI ಸಲಹೆ ಲಭ್ಯವಿಲ್ಲ.'],
   ml: ['കര കണ്ടെത്തിയില്ല', 'ജലാശയങ്ങൾക്ക് AI ഉപദേശം ലഭ്യമല്ല.']
 };
+const noLandText = i => (NO_LAND_TEXT[currentLanguage] || NO_LAND_TEXT.en)[i];
+
+// Status / error strings used by the async flows (lang.js still carries English placeholders for several of these).
+const UI_EXTRA_KEYS = ['updatingAdvisory', 'updatingDx', 'stop', 'noVoice', 'timeout', 'failed', 'tapMapFirst', 'choosePhoto'];
+const UI_EXTRA = {
+  en: ['Updating advisory in the selected language…', 'Updating diagnosis in the selected language…', '⏹ Stop', 'No voice for this language is installed on this device; playback may be silent or use another voice.', 'The request took too long. Please try again.', 'Request failed:', 'Tap the map to place a pin first.', 'Choose a photo first.'],
+  hi: ['चुनी गई भाषा में सलाह अपडेट हो रही है…', 'चुनी गई भाषा में निदान अपडेट हो रहा है…', '⏹ रोकें', 'इस डिवाइस पर इस भाषा की आवाज़ इंस्टॉल नहीं है; ऑडियो शांत रह सकता है या दूसरी आवाज़ में चल सकता है।', 'अनुरोध में बहुत समय लगा। कृपया फिर से प्रयास करें।', 'अनुरोध विफल:', 'पहले नक्शे पर टैप करके पिन लगाएँ।', 'पहले फ़ोटो चुनें।'],
+  ta: ['தேர்ந்தெடுத்த மொழியில் ஆலோசனை புதுப்பிக்கப்படுகிறது…', 'தேர்ந்தெடுத்த மொழியில் நோயறிதல் புதுப்பிக்கப்படுகிறது…', '⏹ நிறுத்து', 'இந்த சாதனத்தில் இந்த மொழிக்கான குரல் நிறுவப்படவில்லை; ஒலி வராமல் போகலாம் அல்லது வேறு குரலில் ஒலிக்கலாம்.', 'கோரிக்கைக்கு அதிக நேரம் ஆனது. மீண்டும் முயலவும்.', 'கோரிக்கை தோல்வியடைந்தது:', 'முதலில் வரைபடத்தில் தட்டி பின் வைக்கவும்.', 'முதலில் புகைப்படத்தைத் தேர்ந்தெடுக்கவும்.'],
+  te: ['ఎంచుకున్న భాషలో సలహా నవీకరించబడుతోంది…', 'ఎంచుకున్న భాషలో నిర్ధారణ నవీకరించబడుతోంది…', '⏹ ఆపు', 'ఈ పరికరంలో ఈ భాషకు వాయిస్ ఇన్‌స్టాల్ కాలేదు; ఆడియో వినిపించకపోవచ్చు లేదా వేరే వాయిస్‌లో రావచ్చు.', 'అభ్యర్థనకు చాలా సమయం పట్టింది. దయచేసి మళ్లీ ప్రయత్నించండి.', 'అభ్యర్థన విఫలమైంది:', 'ముందుగా మ్యాప్‌పై నొక్కి పిన్ ఉంచండి.', 'ముందుగా ఫోటోను ఎంచుకోండి.'],
+  bn: ['নির্বাচিত ভাষায় পরামর্শ হালনাগাদ হচ্ছে…', 'নির্বাচিত ভাষায় রোগনির্ণয় হালনাগাদ হচ্ছে…', '⏹ থামান', 'এই ডিভাইসে এই ভাষার কণ্ঠস্বর ইনস্টল করা নেই; অডিও নীরব থাকতে পারে বা অন্য কণ্ঠে বাজতে পারে।', 'অনুরোধে অনেক সময় লেগেছে। আবার চেষ্টা করুন।', 'অনুরোধ ব্যর্থ হয়েছে:', 'প্রথমে মানচিত্রে ট্যাপ করে পিন বসান।', 'প্রথমে একটি ছবি বেছে নিন।'],
+  mr: ['निवडलेल्या भाषेत सल्ला अद्ययावत होत आहे…', 'निवडलेल्या भाषेत निदान अद्ययावत होत आहे…', '⏹ थांबवा', 'या डिव्हाइसवर या भाषेचा आवाज इंस्टॉल नाही; ऑडिओ शांत राहू शकतो किंवा दुसऱ्या आवाजात वाजू शकतो.', 'विनंतीला खूप वेळ लागला. कृपया पुन्हा प्रयत्न करा.', 'विनंती अयशस्वी:', 'आधी नकाशावर टॅप करून पिन लावा.', 'आधी फोटो निवडा.'],
+  pa: ['ਚੁਣੀ ਭਾਸ਼ਾ ਵਿੱਚ ਸਲਾਹ ਅੱਪਡੇਟ ਹੋ ਰਹੀ ਹੈ…', 'ਚੁਣੀ ਭਾਸ਼ਾ ਵਿੱਚ ਨਿਦਾਨ ਅੱਪਡੇਟ ਹੋ ਰਿਹਾ ਹੈ…', '⏹ ਰੋਕੋ', "ਇਸ ਡਿਵਾਈਸ 'ਤੇ ਇਸ ਭਾਸ਼ਾ ਦੀ ਆਵਾਜ਼ ਇੰਸਟਾਲ ਨਹੀਂ ਹੈ; ਆਡੀਓ ਚੁੱਪ ਰਹਿ ਸਕਦਾ ਹੈ ਜਾਂ ਹੋਰ ਆਵਾਜ਼ ਵਿੱਚ ਚੱਲ ਸਕਦਾ ਹੈ।", 'ਬੇਨਤੀ ਨੂੰ ਬਹੁਤ ਸਮਾਂ ਲੱਗਿਆ। ਕਿਰਪਾ ਕਰਕੇ ਮੁੜ ਕੋਸ਼ਿਸ਼ ਕਰੋ।', 'ਬੇਨਤੀ ਅਸਫਲ:', "ਪਹਿਲਾਂ ਨਕਸ਼ੇ 'ਤੇ ਟੈਪ ਕਰਕੇ ਪਿੰਨ ਲਗਾਓ।", 'ਪਹਿਲਾਂ ਫੋਟੋ ਚੁਣੋ।'],
+  gu: ['પસંદ કરેલી ભાષામાં સલાહ અપડેટ થઈ રહી છે…', 'પસંદ કરેલી ભાષામાં નિદાન અપડેટ થઈ રહ્યું છે…', '⏹ રોકો', 'આ ઉપકરણ પર આ ભાષાનો અવાજ ઇન્સ્ટોલ નથી; ઑડિયો શાંત રહી શકે અથવા બીજા અવાજમાં વાગી શકે.', 'વિનંતીમાં ઘણો સમય લાગ્યો. કૃપા કરીને ફરી પ્રયાસ કરો.', 'વિનંતી નિષ્ફળ:', 'પહેલા નકશા પર ટૅપ કરીને પિન મૂકો.', 'પહેલા ફોટો પસંદ કરો.'],
+  kn: ['ಆಯ್ಕೆ ಮಾಡಿದ ಭಾಷೆಯಲ್ಲಿ ಸಲಹೆ ನವೀಕರಿಸಲಾಗುತ್ತಿದೆ…', 'ಆಯ್ಕೆ ಮಾಡಿದ ಭಾಷೆಯಲ್ಲಿ ರೋಗನಿರ್ಣಯ ನವೀಕರಿಸಲಾಗುತ್ತಿದೆ…', '⏹ ನಿಲ್ಲಿಸಿ', 'ಈ ಸಾಧನದಲ್ಲಿ ಈ ಭಾಷೆಯ ಧ್ವನಿ ಸ್ಥಾಪಿಸಲಾಗಿಲ್ಲ; ಆಡಿಯೋ ಮೌನವಾಗಿರಬಹುದು ಅಥವಾ ಬೇರೆ ಧ್ವನಿಯಲ್ಲಿ ಕೇಳಬಹುದು.', 'ವಿನಂತಿಗೆ ತುಂಬಾ ಸಮಯ ಹಿಡಿಯಿತು. ದಯವಿಟ್ಟು ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.', 'ವಿನಂತಿ ವಿಫಲವಾಗಿದೆ:', 'ಮೊದಲು ನಕ್ಷೆಯ ಮೇಲೆ ಟ್ಯಾಪ್ ಮಾಡಿ ಪಿನ್ ಇರಿಸಿ.', 'ಮೊದಲು ಫೋಟೋ ಆಯ್ಕೆಮಾಡಿ.'],
+  ml: ['തിരഞ്ഞെടുത്ത ഭാഷയിൽ ഉപദേശം പുതുക്കുന്നു…', 'തിരഞ്ഞെടുത്ത ഭാഷയിൽ രോഗനിർണയം പുതുക്കുന്നു…', '⏹ നിർത്തുക', 'ഈ ഉപകരണത്തിൽ ഈ ഭാഷയുടെ ശബ്ദം ഇൻസ്റ്റാൾ ചെയ്തിട്ടില്ല; ഓഡിയോ കേൾക്കാതിരിക്കാം അല്ലെങ്കിൽ മറ്റൊരു ശബ്ദത്തിൽ കേൾക്കാം.', 'അഭ്യർത്ഥനയ്ക്ക് വളരെ സമയമെടുത്തു. വീണ്ടും ശ്രമിക്കുക.', 'അഭ്യർത്ഥന പരാജയപ്പെട്ടു:', 'ആദ്യം മാപ്പിൽ ടാപ്പ് ചെയ്ത് പിൻ ഇടുക.', 'ആദ്യം ഒരു ഫോട്ടോ തിരഞ്ഞെടുക്കുക.']
+};
+const uiText = key => {
+  const i = UI_EXTRA_KEYS.indexOf(key);
+  return (UI_EXTRA[currentLanguage] || UI_EXTRA.en)[i] ?? UI_EXTRA.en[i];
+};
+
+// Non-blocking notice; replaces alert(), whose modal dialog froze the page while requests were still in flight.
+function showNotice(message, kind = 'error') {
+  let box = $('app-notice');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'app-notice';
+    box.setAttribute('role', 'status');
+    box.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);max-width:min(560px,calc(100% - 32px));padding:12px 16px;border-radius:8px;font-size:14px;box-shadow:0 6px 24px rgba(0,0,0,.18);z-index:9999;display:none;';
+    document.body.appendChild(box);
+  }
+  box.style.background = kind === 'error' ? '#fef2f2' : '#eff6ff';
+  box.style.color = kind === 'error' ? '#991b1b' : '#1e3a8a';
+  box.style.border = `1px solid ${kind === 'error' ? '#fecaca' : '#bfdbfe'}`;
+  box.textContent = message;
+  box.style.display = 'block';
+  clearTimeout(showNotice.timer);
+  showNotice.timer = setTimeout(() => { box.style.display = 'none'; }, 6000);
+}
+
+function isNoLand(fs) {
+  return fs?.health?.status === 'no_land_detected'
+    || ['water', 'water body', 'water bodies'].includes(String(fs?.land_cover?.class || '').toLowerCase().replaceAll('_', ' '));
+}
 
 window.localizePlace = function(name, language = currentLanguage) {
     if(!name) return "";
@@ -186,42 +230,65 @@ function updateUI() {
   // Re-render Advisory
   if (currentAdvisory) {
     renderAdvisory(currentAdvisory);
+  } else if (isNoLand(currentFieldState) && $('adv-empty').style.display !== 'none' && !$('adv-empty').querySelector('[data-i18n]')) {
+    $('adv-empty').textContent = `${noLandText(0)} — ${noLandText(1)}`;
   }
-  
+
   // Re-render Dx
   if (lastDxResult) {
      renderDx(lastDxResult);
   }
 }
 
+// Results are cached per field/photo and language, so switching back to a language is instant
+// and the previous content stays on screen (dimmed) while a new translation loads.
+const advisoryCache = new Map();
+const dxCache = new Map();
+let analysisId = 0;
+let dxImageId = 0;
+let advisoryLang = null;
+let langRefreshTimer = null;
+const advisoryKey = (lang = currentLanguage) => `${analysisId}|${lang}`;
+const dxKey = (lang = currentLanguage) => `${dxImageId}|${$('dx-crop').value}|${lang}`;
+const cacheResult = (cache, key, value) => {
+  cache.set(key, value);
+  if (cache.size > 40) cache.delete(cache.keys().next().value);
+};
+
 async function changeLanguage(lang) {
   const refreshAdvisory = Boolean(currentAdvisory) || $('adv-loading').style.display !== 'none';
   const refreshDiagnosis = Boolean(lastDxResult) || $('dx-loading').style.display !== 'none';
+  // Invalidate in-flight requests so a late response in the old language is never rendered.
   ++advisoryRequestId;
   ++dxRequestId;
   advisoryAbortController?.abort();
   dxAbortController?.abort();
-  if (refreshAdvisory) currentAdvisory = null;
-  if (refreshDiagnosis) lastDxResult = null;
   currentLanguage = lang;
   document.documentElement.lang = lang;
-  localStorage.setItem('agrinet_language', lang);
-  if ('speechSynthesis' in window) speechSynthesis.cancel();
-  updateUI(); // Immediately shift static UI
-  
-  // Start independent refreshes without blocking the language selector or one another.
-  if (refreshAdvisory && currentFieldState) void regenerateAdvisory();
-  if (refreshDiagnosis && $('dx-file').files[0]) void regenerateDx();
+  try { localStorage.setItem('agrinet_language', lang); } catch (e) { /* storage may be blocked */ }
+  stopSpeech();
+  updateUI(); // Immediately shift static UI; existing advisory/diagnosis stay visible until replaced.
+
+  // Debounce so flicking through several languages only fetches the one the user settles on.
+  clearTimeout(langRefreshTimer);
+  langRefreshTimer = setTimeout(() => {
+    if (refreshAdvisory && currentFieldState) void regenerateAdvisory();
+    if (refreshDiagnosis && $('dx-file').files[0]) void regenerateDx();
+  }, 350);
 }
 
 
 // Navigation
 document.querySelectorAll('.nav-btn').forEach(btn => {
   btn.addEventListener('click', (e) => {
+    const target = e.currentTarget;
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active'));
-    e.target.classList.add('active');
-    $(e.target.dataset.target).classList.add('active');
+    target.classList.add('active');
+    $(target.dataset.target).classList.add('active');
+    // Each view opens at its top (e.g. Field Intelligence on the health score) rather than
+    // inheriting the scroll offset of the previous view.
+    window.scrollTo({ top: 0, behavior: 'instant' });
   });
 });
 
@@ -233,14 +300,19 @@ async function apiPost(url, body, isForm=false, signal=null) {
     if (signal.aborted) controller.abort();
     else signal.addEventListener('abort', abortRequest, { once: true });
   }
-  const timeout = setTimeout(() => controller.abort(), 35000);
+  let timedOut = false;
+  const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 45000);
   const opts = { method: 'POST', body: isForm ? body : JSON.stringify(body), signal: controller.signal };
   if(!isForm) opts.headers = { 'Content-Type': 'application/json' };
   try {
     const r = await fetch(url, opts);
-    const j = await r.json();
-    if(!r.ok) throw new Error(j.detail || r.statusText);
+    let j = null;
+    try { j = await r.json(); } catch (parseError) { /* non-JSON error page */ }
+    if(!r.ok || !j) throw new Error(`${uiText('failed')} ${j?.detail || r.statusText || r.status}`);
     return j;
+  } catch (e) {
+    if (timedOut) throw new Error(uiText('timeout'));
+    throw e;
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener('abort', abortRequest);
@@ -295,7 +367,7 @@ async function runScenario(key, lat, lon) {
 }
 
 $('btn-analyze').onclick = async () => {
-  if(!pin) return alert('Tap map first');
+  if(!pin) return showNotice(uiText('tapMapFirst'), 'info');
   const {lat, lng} = pin.getLatLng();
   const lon = normalizeLongitude(lng);
   await analyzeField({ lat, lon, crop: $('crop-input').value, is_demo: false });
@@ -313,14 +385,18 @@ async function analyzeField(req) {
     currentAnalysisResponse = await apiPost('/api/v1/analyze', req);
     currentFieldState = currentAnalysisResponse.field_state;
     // Wipe advisory on new field
+    ++analysisId;
     currentAdvisory = null;
+    advisoryLang = null;
+    stopSpeech();
+    $('adv-loading').style.display = 'none';
     $('adv-content').style.display = 'none';
-    $('adv-empty').style.display = 'block';
-    
+    resetAdvisoryEmpty();
+
     renderField(currentAnalysisResponse);
     document.querySelector('[data-target="view-field"]').click();
   } catch(e) {
-    alert(e.message);
+    showNotice(e.message);
   } finally {
     $('btn-analyze').disabled = false;
     $('btn-analyze').textContent = window.t('analyzeBtn');
@@ -350,12 +426,19 @@ function renderField(res) {
   $('f-location').textContent = `${fs.field.lat.toFixed(4)}, ${fs.field.lon.toFixed(4)}`;
   $('f-crop').textContent = fs.field.crop ? `${window.t('declaredCrop')} ${esc(fs.field.crop)}` : window.t('unknownCrop');
 
-  const isWater = String(fs.land_cover.class || '').toLowerCase().replaceAll('_', ' ') === 'water';
-  $('btn-gen-adv').disabled = isWater;
+  const noLand = isNoLand(fs);
+  $('btn-gen-adv').disabled = noLand;
+  $('btn-gen-adv').title = noLand ? noLandText(1) : '';
 
   const h = fs.health;
   const ring = $('f-health-ring');
-  if(h.score !== null) {
+  if (noLand) {
+    ring.dataset.status = 'no_land';
+    $('f-health-score').textContent = '--';
+    $('f-health-status').textContent = noLandText(0);
+    $('f-health-status').style.color = 'var(--text-muted)';
+    $('f-health-comps').innerHTML = `<p class="dp-label" style="text-align:center;">${esc(noLandText(1))}</p>`;
+  } else if(h.score !== null) {
     ring.dataset.status = h.status;
     $('f-health-score').textContent = h.score;
     $('f-health-status').textContent = window.t('status_' + h.status) || h.status.toUpperCase();
@@ -368,8 +451,10 @@ function renderField(res) {
       </div>
     `).join('');
   } else {
+    ring.dataset.status = 'unavailable';
     $('f-health-score').textContent = '--';
-    $('f-health-status').textContent = h.status === 'no_land_detected' ? NO_LAND_TEXT[currentLanguage][0] : (window.t('status_unknown') || 'UNAVAILABLE');
+    $('f-health-status').textContent = window.t('status_unknown') || 'UNAVAILABLE';
+    $('f-health-status').style.color = 'var(--text-muted)';
     $('f-health-comps').innerHTML = '';
   }
 
@@ -401,11 +486,18 @@ $('btn-gen-adv').onclick = async () => {
   await regenerateAdvisory();
 };
 
+function resetAdvisoryEmpty() {
+  $('adv-empty').innerHTML = `<span data-i18n="advEmpty">${esc(window.t('advEmpty'))}</span>`;
+  $('adv-empty').style.display = 'block';
+}
+
 async function regenerateAdvisory() {
-   if (String(currentFieldState?.land_cover?.class || '').toLowerCase().replaceAll('_', ' ') === 'water') {
+   if (isNoLand(currentFieldState)) {
+     ++advisoryRequestId;
+     advisoryAbortController?.abort();
      currentAdvisory = null;
      $('adv-loading').style.display = 'none';
-     $('adv-empty').textContent = NO_LAND_TEXT[currentLanguage][1];
+     $('adv-empty').textContent = `${noLandText(0)} — ${noLandText(1)}`;
      $('adv-empty').style.display = 'block';
      $('adv-content').style.display = 'none';
      return;
@@ -413,13 +505,24 @@ async function regenerateAdvisory() {
    const expectedReqId = ++advisoryRequestId;
    advisoryAbortController?.abort();
    advisoryAbortController = new AbortController();
-   
+   const requestLang = currentLanguage;
+   const cacheKey = advisoryKey(requestLang);
+
    $('adv-empty').style.display = 'none';
-   
-   // Update loading text translation dynamically
-      // Check if we are updating an existing advisory or generating new
+
+   const cached = advisoryCache.get(cacheKey);
+   if (cached) {
+      currentAdvisory = cached;
+      advisoryLang = requestLang;
+      $('adv-loading').style.display = 'none';
+      $('adv-content').style.opacity = '1';
+      renderAdvisory(cached);
+      return;
+   }
+
+   // Check if we are updating an existing advisory or generating new
    if (currentAdvisory) {
-      $('adv-loading').innerHTML = `<div class="loader" style="width:40px;height:40px;margin-bottom:20px;"></div><p style="color:var(--text-muted); margin-top:8px;">${window.t('updatingAdvisory')}</p>`;
+      $('adv-loading').innerHTML = `<div class="loader" style="width:40px;height:40px;margin-bottom:20px;"></div><p style="color:var(--text-muted); margin-top:8px;">${esc(uiText('updatingAdvisory'))}</p>`;
       $('adv-content').style.opacity = '0.5';
    } else {
       $('adv-loading').innerHTML = `<div class="loader" style="width:40px;height:40px;margin-bottom:20px;"></div><h3 style="font-family:var(--font-display);">${window.t('advLoadingTitle')}</h3><p style="color:var(--text-muted); margin-top:8px;">${window.t('advLoadingDesc')}</p>`;
@@ -432,17 +535,20 @@ async function regenerateAdvisory() {
     const adv = await apiPost('/api/v1/advisory', {
       field_state: currentAnalysisResponse.field_state,
       evidence: currentAnalysisResponse.evidence,
-      lang: currentLanguage
+      lang: requestLang
     }, false, advisoryAbortController.signal);
-    
+
     if (expectedReqId !== advisoryRequestId) return; // Stale protection
+    // Only cache real advisories; offline/timeout fallbacks carry no structured sections.
+    if (adv.field_status || adv.what_the_data_shows) cacheResult(advisoryCache, cacheKey, adv);
     currentAdvisory = adv;
-    
+    advisoryLang = requestLang;
+
     renderAdvisory(currentAdvisory);
   } catch(e) {
-    if (expectedReqId !== advisoryRequestId) return; 
-    alert(e.message);
-    if (!currentAdvisory) $('adv-empty').style.display = 'block';
+    if (expectedReqId !== advisoryRequestId) return;
+    showNotice(e.message);
+    if (!currentAdvisory) resetAdvisoryEmpty();
   } finally {
     if (expectedReqId === advisoryRequestId) {
        $('adv-loading').style.display = 'none';
@@ -597,53 +703,114 @@ function renderAdvisory(a) {
   container.appendChild(dynBox);
 
   $('btn-speak').onclick = speakAdvisory;
+  updateSpeakButton();
 }
 
 // Voice
 const VOICE = {en:'en-IN',hi:'hi-IN',ta:'ta-IN',te:'te-IN',bn:'bn-IN',mr:'mr-IN',pa:'pa-IN',gu:'gu-IN',kn:'kn-IN',ml:'ml-IN'};
-function speakAdvisory() {
-  if (!currentAdvisory || !('speechSynthesis' in window)) return;
-  const collect = value => Array.isArray(value) ? value.flatMap(collect)
-    : value && typeof value === 'object' ? Object.values(value).flatMap(collect)
-    : typeof value === 'string' ? [value] : [];
+// Enum-like or ID fields that should not be read aloud (they are codes, not sentences).
+const SILENT_ADVISORY_KEYS = new Set(['evidence_id', 'evidence_ids', 'severity', 'priority', 'suitability', 'status', '_raw']);
+let speechSession = 0;
+
+function updateSpeakButton() {
+  const btn = $('btn-speak');
+  if (!btn) return;
+  btn.textContent = speechSession ? uiText('stop') : window.t('listen');
+}
+
+function stopSpeech() {
+  speechSession = 0;
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  updateSpeakButton();
+}
+
+// Chrome fills the voice list asynchronously; wait briefly for it instead of picking from an empty list.
+function loadVoices() {
+  const voices = speechSynthesis.getVoices();
+  if (voices.length) return Promise.resolve(voices);
+  return new Promise(resolve => {
+    const done = () => resolve(speechSynthesis.getVoices());
+    speechSynthesis.addEventListener('voiceschanged', done, { once: true });
+    setTimeout(done, 1200);
+  });
+}
+
+async function speakAdvisory() {
+  if (!('speechSynthesis' in window)) return;
+  if (speechSession) return stopSpeech();
+  if (!currentAdvisory) return;
+  const collect = (value, key = '') => SILENT_ADVISORY_KEYS.has(key) ? []
+    : Array.isArray(value) ? value.flatMap(v => collect(v))
+    : value && typeof value === 'object' ? Object.entries(value).flatMap(([k, v]) => collect(v, k))
+    : typeof value === 'string' && value.trim() ? [value.trim()] : [];
   const payload = collect(currentAdvisory).join('. ').trim();
   if (!payload) return;
-  speechSynthesis.cancel();
-  const langPrefix = currentLanguage.toLowerCase();
-  const voice = speechSynthesis.getVoices().find(item => item.lang.toLowerCase().startsWith(langPrefix));
+
+  stopSpeech();
+  const session = speechSession = Date.now();
+  // Speak in the language the advisory was written in, even if a translation is still loading.
+  const lang = advisoryLang || currentLanguage;
+  const voices = await loadVoices();
+  if (session !== speechSession) return;
+  const voice = voices.find(v => v.lang.toLowerCase().replace('_', '-') === VOICE[lang]?.toLowerCase())
+    || voices.find(v => v.lang.toLowerCase().startsWith(lang));
+  if (!voice && lang !== 'en') showNotice(uiText('noVoice'), 'info');
+
   const chunks = payload.match(/[^.!?।]+[.!?।]*/g) || [payload];
+  const parts = [];
   let pending = '';
   for (const sentence of chunks) {
     if (pending.length + sentence.length > 220 && pending) {
-      queueSpeech(pending, voice);
+      parts.push(pending);
       pending = '';
     }
     pending += `${sentence} `;
   }
-  if (pending.trim()) queueSpeech(pending, voice);
+  if (pending.trim()) parts.push(pending);
+  // Chrome can drop an utterance queued in the same tick as cancel(); give it a moment.
+  setTimeout(() => {
+    if (session !== speechSession) return;
+    parts.forEach((text, i) => queueSpeech(text, voice, lang, session, i === parts.length - 1));
+    updateSpeakButton();
+  }, 60);
 }
 
-function queueSpeech(text, voice) {
+function queueSpeech(text, voice, lang, session, isLast) {
   const utterance = new SpeechSynthesisUtterance(text.trim());
-  utterance.lang = VOICE[currentLanguage] || 'en-IN';
+  utterance.lang = VOICE[lang] || 'en-IN';
   if (voice) utterance.voice = voice;
+  const finish = () => {
+    if (session === speechSession && (isLast || !speechSynthesis.speaking)) {
+      speechSession = 0;
+      updateSpeakButton();
+    }
+  };
+  if (isLast) utterance.onend = finish;
+  utterance.onerror = finish;
   speechSynthesis.speak(utterance);
 }
 
 // Crop Doctor
+let optimizedDxImage = null; // { id, file } — re-encoded once per photo, reused on language switches
 $('dx-drop').onclick = () => $('dx-file').click();
 $('dx-file').onchange = (e) => {
   if(e.target.files[0]) {
     $('dx-preview').src = URL.createObjectURL(e.target.files[0]);
     $('dx-preview').style.display = 'block';
     // Remove previous result context when image changes
+    ++dxImageId;
+    ++dxRequestId;
+    dxAbortController?.abort();
+    optimizedDxImage = null;
     lastDxResult = null;
+    $('dx-loading').style.display = 'none';
+    $('btn-dx').disabled = false;
     $('dx-res').style.display = 'none';
   }
 };
 
 $('btn-dx').onclick = async () => {
-  if(!$('dx-file').files[0]) return alert('Choose photo first');
+  if(!$('dx-file').files[0]) return showNotice(uiText('choosePhoto'), 'info');
   await regenerateDx();
 };
 
@@ -652,13 +819,25 @@ async function regenerateDx() {
   dxAbortController?.abort();
   dxAbortController = new AbortController();
   const f = $('dx-file').files[0];
-    
+  const requestLang = currentLanguage;
+  const cacheKey = dxKey(requestLang);
+
   $('dx-empty').style.display = 'none';
+  const cached = dxCache.get(cacheKey);
+  if (cached) {
+    lastDxResult = cached;
+    $('dx-loading').style.display = 'none';
+    $('dx-res').style.opacity = '1';
+    $('btn-dx').disabled = false;
+    renderDx(cached);
+    return;
+  }
+
   if (lastDxResult) {
-       $('dx-loading').innerHTML = `<div class="loader"></div><p style="margin-top:12px;">${window.t('updatingDx')}</p>`;
+       $('dx-loading').innerHTML = `<div class="loader"></div><p style="margin-top:12px;">${esc(uiText('updatingDx'))}</p>`;
        $('dx-res').style.opacity = '0.5';
   } else {
-       $('dx-loading').innerHTML = `<div class="loader"></div><p style="margin-top:12px;">${window.t('dxLoading')}</p>`;
+       $('dx-loading').innerHTML = `<div class="loader"></div><p style="margin-top:12px;">${esc(window.t('dxLoading'))}</p>`;
        $('dx-res').style.display = 'none';
   }
   
@@ -667,21 +846,27 @@ async function regenerateDx() {
   
   try {
     const fd = new FormData();
-    const optimizedImage = await optimizeDiagnosisImage(f);
+    const imageId = dxImageId;
+    if (optimizedDxImage?.id !== imageId) optimizedDxImage = { id: imageId, file: await optimizeDiagnosisImage(f) };
     if (expectedReqId !== dxRequestId) return;
-    fd.append('image', optimizedImage);
-    fd.append('lang', currentLanguage);
+    fd.append('image', optimizedDxImage.file);
+    fd.append('lang', requestLang);
     fd.append('crop', $('dx-crop').value);
-    if(currentFieldState) fd.append('field_context_json', JSON.stringify(currentFieldState));
+    // Only the fields the diagnosis prompt uses; the full field state (series, evidence) just bloats the upload.
+    if (currentFieldState) fd.append('field_context_json', JSON.stringify({
+      land_cover: { class: currentFieldState.land_cover?.class, is_cropland: currentFieldState.land_cover?.is_cropland },
+      vegetation: { ndvi: currentFieldState.vegetation?.ndvi, ndwi: currentFieldState.vegetation?.ndwi },
+    }));
     const d = await apiPost('/api/v1/diagnose', fd, true, dxAbortController.signal);
     if (expectedReqId !== dxRequestId) return; 
     
+    if (d.diagnosis && d.confidence && !d._raw) cacheResult(dxCache, cacheKey, d);
     lastDxResult = d;
     renderDx(d);
     
   } catch(e) {
     if (expectedReqId !== dxRequestId) return; 
-    alert(e.message);
+    showNotice(e.message);
     if(!lastDxResult) $('dx-empty').style.display = 'block';
   } finally {
     if (expectedReqId === dxRequestId) {
@@ -692,17 +877,28 @@ async function regenerateDx() {
   }
 }
 
+// Phone photos are often 3–12 MB; a 1280 px JPEG is plenty for leaf symptoms and uploads and
+// processes several times faster. Formats the browser cannot decode (e.g. HEIC on Chrome) are
+// sent unchanged and identified server-side.
+const DX_MAX_EDGE = 1280;
 async function optimizeDiagnosisImage(file) {
-  if (!window.createImageBitmap || (file.size < 6_000_000 && ['image/jpeg', 'image/png', 'image/webp'].includes(file.type))) return file;
+  if (!window.createImageBitmap) return file;
   try {
     const bitmap = await createImageBitmap(file);
-    const scale = Math.min(1, 2000 / Math.max(bitmap.width, bitmap.height));
+    const scale = Math.min(1, DX_MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+    if (scale === 1 && file.size < 1_500_000 && ['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      bitmap.close();
+      return file;
+    }
     const canvas = document.createElement('canvas');
     canvas.width = Math.max(1, Math.round(bitmap.width * scale));
     canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff'; // transparent PNGs would otherwise turn black as JPEG
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     bitmap.close();
-    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.88));
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85));
     return blob ? new File([blob], 'crop-photo.jpg', { type: 'image/jpeg' }) : file;
   } catch (error) {
     return file;

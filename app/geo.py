@@ -1,8 +1,10 @@
-import os, json, math
+import os, json, math, time, logging, threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from pathlib import Path
 import numpy as np, pandas as pd, joblib
 from scipy.spatial import cKDTree
 
+log = logging.getLogger("agrinet.geo")
 ROOT = Path(__file__).resolve().parent.parent
 LABELS = json.loads((Path(__file__).parent / "label_map.json").read_text())
 RADIUS_M = float(os.getenv("PLANET_RADIUS_M", 300))
@@ -55,9 +57,9 @@ def planet_lookup(lat, lon):
     r = _lookup.iloc[int(i)]
     bands = r[B].astype(float).values
     ndvi = float((bands[7] - bands[5]) / (bands[7] + bands[5] + 1e-6))
-    # NDWI = (Green - NIR) / (Green + NIR); PlanetScope B2=Green(490nm), B7=NIR(865nm) → index 1,6 (0-based)
-    ndwi_denom = bands[1] + bands[6]
-    ndwi = float((bands[1] - bands[6]) / (ndwi_denom + 1e-6)) if ndwi_denom != 0 else None
+    # NDWI = (Green - NIR) / (Green + NIR); PlanetScope SuperDove B4=Green(565nm), B8=NIR(865nm) → index 3,7 (0-based)
+    ndwi_denom = bands[3] + bands[7]
+    ndwi = float((bands[3] - bands[7]) / (ndwi_denom + 1e-6)) if ndwi_denom != 0 else None
     ref = int(r.label); out = {"source": "planet_highres", "resolution": "~3 m PlanetScope", "observed": str(r.date),
         "distance_m": round(dist_m), "land_cover_id": ref, "land_cover": LABELS["planet_classes"][str(ref)],
         "label_origin": "Dynamic World label stored with this Planet cell", "is_cropland": ref in LABELS["cropland_ids"],
@@ -72,60 +74,130 @@ def planet_lookup(lat, lon):
 
 # ---- Earth Engine (live, everywhere) path ----
 _ee_ok = None
+_ee_failed_at = 0.0
+_EE_RETRY_S = 300
+_ee_lock = threading.Lock()
 def _ee():
-    global _ee_ok
-    if _ee_ok is None:
-        try:
-            import ee
-            ee.Initialize(project=os.getenv("EE_PROJECT") or None); _ee_ok = True
-        except Exception as e:
-            print("Earth Engine unavailable:", e); _ee_ok = False
+    """Initialise Earth Engine once; a failed init is retried after a cool-down instead of disabling EE for good."""
+    global _ee_ok, _ee_failed_at
+    with _ee_lock:
+        if _ee_ok is False and time.monotonic() - _ee_failed_at > _EE_RETRY_S:
+            _ee_ok = None
+        if _ee_ok is None:
+            try:
+                import ee
+                ee.Initialize(project=os.getenv("EE_PROJECT") or None); _ee_ok = True
+            except Exception as e:
+                log.warning("Earth Engine unavailable: %s", e); _ee_ok = False; _ee_failed_at = time.monotonic()
     return _ee_ok
 
+def warm_up():
+    """Initialise Earth Engine and the Planet lookup ahead of the first request (called from app startup)."""
+    _ee(); _load()
+
+def _s2_clear(img):
+    """Mask clouds/shadows: keep vegetation, bare soil, water and unclassified pixels from the S2 scene classification."""
+    scl = img.select("SCL")
+    return img.updateMask(scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7)))
+
 def ee_analysis(lat, lon, days=180):
-    """Dynamic World land cover (mode, last 90d) + Sentinel-2 NDVI + NDWI series at the point."""
+    """Dynamic World land cover (mode, last 90d) + Sentinel-2 NDVI/NDWI series + MODIS land/water mask at the point.
+    Everything is evaluated in a single getInfo() round trip to keep latency low."""
     if not _ee(): return None
     import ee, datetime as dt
     pt = ee.Geometry.Point([lon, lat]); end = dt.date.today(); start = end - dt.timedelta(days=days)
     dw = (ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1").filterBounds(pt)
-          .filterDate(str(end - dt.timedelta(days=90)), str(end)).select("label").mode())
-    label_value = dw.reduceRegion(ee.Reducer.first(), pt, 10).get("label")
+          .filterDate(str(end - dt.timedelta(days=90)), str(end)))
     probability_bands = ["water", "trees", "grass", "flooded_vegetation", "crops", "shrub_and_scrub", "built", "bare", "snow_and_ice"]
-    confidence_img = (ee.ImageCollection("GOOGLE/DYNAMICWORLD/V1").filterBounds(pt)
-                      .filterDate(str(end - dt.timedelta(days=90)), str(end))
-                      .select(probability_bands).mean().reduce(ee.Reducer.max()))
-    confidence_value = confidence_img.reduceRegion(ee.Reducer.first(), pt, 10).get("max")
-    ee_values = ee.Dictionary({"label": label_value, "confidence": confidence_value}).getInfo()
-    lab = ee_values.get("label")
-    confidence = ee_values.get("confidence")
+    # -1 marks "no value": the whole query is one round trip, so a missing Dynamic World scene (e.g. open
+    # sea) must not raise and take the NDVI series and water mask down with it. ee.Algorithms.If is lazy.
+    has_dw = dw.size().gt(0)
+    label_value = ee.Algorithms.If(has_dw, dw.select("label").mode()
+                                   .reduceRegion(ee.Reducer.first(), pt, 10).get("label", -1), -1)
+    confidence_value = ee.Algorithms.If(has_dw, dw.select(probability_bands).mean().reduce(ee.Reducer.max())
+                                        .reduceRegion(ee.Reducer.first(), pt, 10).get("max", -1), -1)
+    # MODIS land/water mask also covers open sea and coasts, where Dynamic World has no scenes.
+    water_mask = (ee.ImageCollection("MODIS/061/MOD44W").select("water_mask").sort("system:time_start", False).first()
+                  .reduceRegion(ee.Reducer.first(), pt, 250).get("water_mask", -1))
     s2 = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED").filterBounds(pt).filterDate(str(start), str(end))
-          .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 30))
-          .sort("CLOUDY_PIXEL_PERCENTAGE").limit(24))
+          .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60))
+          .sort("system:time_start", False).limit(20).map(_s2_clear))
     def f(img):
         ndvi_v = img.normalizedDifference(["B8", "B4"]).reduceRegion(ee.Reducer.mean(), pt.buffer(30), 10).get("nd")
         # NDWI = (Green - NIR) / (Green + NIR) using Sentinel-2 B3 (Green) and B8 (NIR)
         ndwi_v = img.normalizedDifference(["B3", "B8"]).reduceRegion(ee.Reducer.mean(), pt.buffer(30), 10).get("nd")
         return ee.Feature(None, {"d": img.date().format("YYYY-MM-dd"), "ndvi": ndvi_v, "ndwi": ndwi_v})
-    features = s2.map(f).getInfo()["features"]
-    ndvi_rows = [x["properties"] for x in features if x["properties"].get("ndvi") is not None]
-    ndvi_rows.sort(key=lambda r: r["d"])
-    ndvi_series = [{"date": r["d"], "ndvi": round(r["ndvi"], 3)} for r in ndvi_rows]
-    ndwi_rows = [x["properties"] for x in features if x["properties"].get("ndwi") is not None]
-    ndwi_rows.sort(key=lambda r: r["d"])
-    ndwi_series = [{"date": r["d"], "ndwi": round(r["ndwi"], 3)} for r in ndwi_rows]
-    if lab is None: return {"series": ndvi_series, "ndwi_series": ndwi_series}
-    return {"series": ndvi_series, "ndwi_series": ndwi_series,
-            "source": "earth_engine_live", "resolution": "10 m Dynamic World / Sentinel-2",
+    fc = s2.map(f)
+    ndvi_fc = fc.filter(ee.Filter.notNull(["ndvi"]))
+    ndwi_fc = fc.filter(ee.Filter.notNull(["ndwi"]))
+    v = ee.Dictionary({
+        "label": label_value, "confidence": confidence_value, "water_mask": water_mask,
+        "ndvi_d": ndvi_fc.aggregate_array("d"), "ndvi": ndvi_fc.aggregate_array("ndvi"),
+        "ndwi_d": ndwi_fc.aggregate_array("d"), "ndwi": ndwi_fc.aggregate_array("ndwi"),
+    }).getInfo()
+    ndvi_series = sorted(({"date": d, "ndvi": round(x, 3)} for d, x in zip(v.get("ndvi_d") or [], v.get("ndvi") or [])),
+                         key=lambda r: r["date"])
+    ndwi_series = sorted(({"date": d, "ndwi": round(x, 3)} for d, x in zip(v.get("ndwi_d") or [], v.get("ndwi") or [])),
+                         key=lambda r: r["date"])
+    lab, confidence = (None if v.get(k) in (None, -1) else v[k] for k in ("label", "confidence"))
+    base = {"series": ndvi_series, "ndwi_series": ndwi_series}
+    if lab is None:
+        if v.get("water_mask") == 1:
+            return base | {"source": "earth_engine_live", "resolution": "250 m MODIS land/water mask", "observed": str(end),
+                           "land_cover_id": 0, "land_cover": LABELS["dynamic_world"]["0"], "confidence": None,
+                           "is_cropland": False, "label_origin": "MODIS MOD44W water mask (no Dynamic World scene)"}
+        return base
+    return base | {"source": "earth_engine_live", "resolution": "10 m Dynamic World / Sentinel-2",
             "observed": str(end), "land_cover_id": int(lab), "land_cover": LABELS["dynamic_world"][str(int(lab))],
             "confidence": round(float(confidence), 3) if confidence is not None else None,
             "is_cropland": int(lab) in LABELS["dynamic_world_cropland_ids"]}
 
+# EE results are cached per ~150 m geohash cell. A query that overruns the deadline keeps running
+# and fills the cache, so retrying the same place is instant instead of timing out again.
+EE_TIMEOUT_S = 18.0
+_EE_CACHE_TTL_S = 6 * 3600
+_ee_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ee")
+_ee_cache: dict = {}
+_ee_inflight: dict = {}
+_ee_cache_lock = threading.Lock()
+
+def _ee_job(key, lat, lon):
+    try:
+        res = ee_analysis(lat, lon)
+    except Exception as e:
+        log.warning("EE query failed: %s", e); res = None
+    with _ee_cache_lock:
+        _ee_inflight.pop(key, None)
+        if res is not None:
+            _ee_cache[key] = (time.monotonic(), res)
+            if len(_ee_cache) > 512: _ee_cache.pop(next(iter(_ee_cache)))
+    return res
+
+def ee_analysis_cached(lat, lon, timeout=EE_TIMEOUT_S):
+    """Cached, deadline-bounded ee_analysis(). Returns None when EE is unavailable, failed or is still running."""
+    key = geohash(lat, lon, 7)
+    with _ee_cache_lock:
+        hit = _ee_cache.get(key)
+        if hit and time.monotonic() - hit[0] < _EE_CACHE_TTL_S:
+            return hit[1]
+        fut = _ee_inflight.get(key)
+        if fut is None:
+            fut = _ee_inflight[key] = _ee_pool.submit(_ee_job, key, lat, lon)
+    try:
+        return fut.result(timeout=timeout)
+    except FutureTimeout:
+        log.warning("EE query for %s exceeded %.0fs; continuing without it", key, timeout)
+        return None
+
+def _looks_like_water(res):
+    """Spectral fallback when no land-cover label exists: open water has high NDWI and negative NDVI."""
+    ndwi, ndvi = res.get("ndwi_latest"), res.get("ndvi_latest")
+    return ndwi is not None and ndvi is not None and ndwi >= 0.3 and ndvi < 0.0
+
 def analyze_land(lat, lon):
     """Routing: Planet data if it exists nearby, otherwise Earth Engine. NDVI/NDWI trends from EE when available."""
     planet = planet_lookup(lat, lon)
-    try: ee_res = ee_analysis(lat, lon)
-    except Exception as e:
-        print("EE query failed:", e); ee_res = None
+    ee_res = ee_analysis_cached(lat, lon)
     ndvi_series = (ee_res or {}).get("series", [])
     ndwi_series = (ee_res or {}).get("ndwi_series", [])
     if planet:
@@ -134,7 +206,9 @@ def analyze_land(lat, lon):
     elif ee_res and ee_res.get("land_cover"):
         res = {k: v for k, v in ee_res.items() if k not in ("series", "ndwi_series")}
     else:
-        res = {"source": "none", "land_cover": "unknown", "note": "No Planet data nearby and Earth Engine not configured."}
+        note = ("Earth Engine returned no land-cover label for this point." if ee_res
+                else "No Planet data nearby and Earth Engine is unavailable or timed out.")
+        res = {"source": "none", "land_cover": "unknown", "note": note}
     res["geohash"] = geohash(lat, lon)
     # NDVI
     res["ndvi_series"] = ndvi_series
@@ -147,4 +221,8 @@ def analyze_land(lat, lon):
         res["ndwi_latest"] = ndwi_series[-1]["ndwi"]
     elif planet and planet.get("ndwi_planet") is not None:
         res["ndwi_latest"] = planet["ndwi_planet"]
+    if res["source"] == "none" and _looks_like_water(res):
+        res.update({"source": "earth_engine_live", "land_cover_id": 0, "land_cover": LABELS["dynamic_world"]["0"],
+                    "is_cropland": False, "resolution": "10 m Sentinel-2", "observed": ndwi_series[-1]["date"],
+                    "label_origin": "Spectral water test (NDWI >= 0.3, NDVI < 0)"})
     return res

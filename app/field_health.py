@@ -190,10 +190,22 @@ def _eo_confidence_score(land: dict) -> float | None:
     return min(100, max(0, score))
 
 
+WATER_CLASSES = {"water", "water body", "water bodies"}
+
+
+def is_water_cover(cover: object) -> bool:
+    """True when a land-cover label (e.g. Dynamic World "water") denotes a water body rather than land."""
+    return str(cover or "").strip().lower().replace("_", " ") in WATER_CLASSES
+
+
 def compute_field_health(land: dict, weather: dict, soil: dict) -> dict:
-    """Compute deterministic field health score. Returns score, status, components."""
+    """Compute deterministic field health score. Returns score, status, components.
+
+    Water bodies yield status "no_land_detected" and points without any land-cover
+    label yield "unavailable"; neither gets a score.
+    """
     cover = str(land.get("land_cover", "")).lower().replace("_", " ")
-    if cover in {"water", "water body", "water bodies"}:
+    if is_water_cover(cover):
         return {"score": None, "status": "no_land_detected", "components": {key: None for key in WEIGHTS}, "available_components": 0}
     if cover in {"", "unknown"} or land.get("source") == "none":
         return {"score": None, "status": "unavailable", "components": {key: None for key in WEIGHTS}, "available_components": 0}
