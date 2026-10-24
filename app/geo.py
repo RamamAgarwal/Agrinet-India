@@ -99,7 +99,8 @@ def ee_analysis(lat, lon, days=180):
     lab = ee_values.get("label")
     confidence = ee_values.get("confidence")
     s2 = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED").filterBounds(pt).filterDate(str(start), str(end))
-          .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 30)))
+          .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 30))
+          .sort("CLOUDY_PIXEL_PERCENTAGE").limit(24))
     def f(img):
         ndvi_v = img.normalizedDifference(["B8", "B4"]).reduceRegion(ee.Reducer.mean(), pt.buffer(30), 10).get("nd")
         # NDWI = (Green - NIR) / (Green + NIR) using Sentinel-2 B3 (Green) and B8 (NIR)
@@ -138,6 +139,8 @@ def analyze_land(lat, lon):
     # NDVI
     res["ndvi_series"] = ndvi_series
     if ndvi_series: res["ndvi_latest"] = ndvi_series[-1]["ndvi"]
+    elif planet and planet.get("ndvi_planet") is not None:
+        res["ndvi_latest"] = planet["ndvi_planet"]
     # NDWI
     res["ndwi_series"] = ndwi_series
     if ndwi_series:

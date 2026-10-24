@@ -130,8 +130,22 @@ async def advisory_v1(r: AdvisoryRequestV1):
         }
     
     compact_fs = fs.field_state_for_gemini(r.field_state)
+    # Evidence is passed separately below; omitting its duplicate from field state
+    # keeps the Gemini request smaller and reduces advisory latency.
+    compact_fs.pop("evidence", None)
     try:
-        return await asyncio.to_thread(ai.advisory_v2, compact_fs, r.evidence, r.lang)
+        return await asyncio.wait_for(
+            asyncio.to_thread(ai.advisory_v2, compact_fs, r.evidence, r.lang),
+            timeout=25,
+        )
+    except asyncio.TimeoutError:
+        return {
+            "summary": "AI advisory is taking longer than expected. Please try again.",
+            "field_condition": "Analysis timed out.",
+            "risks": [], "recommendations": [],
+            "regenerative_actions": [], "crop_options": [],
+            "confidence_note": "The AI provider did not respond before the request deadline."
+        }
     except Exception as e:
         # Don't crash; return a graceful fallback advisory
         print(f"Gemini error: {e}")
@@ -170,7 +184,19 @@ async def diagnose_v1(
             pass # Ignore invalid JSON
             
     try:
-        return await asyncio.to_thread(ai.diagnose, data, image.content_type or "image/jpeg", lang, crop, context)
+        return await asyncio.wait_for(
+            asyncio.to_thread(ai.diagnose, data, image.content_type or "image/jpeg", lang, crop, context),
+            timeout=30,
+        )
+    except asyncio.TimeoutError:
+        return {
+            "healthy": False,
+            "likely_issue": "Diagnosis timed out",
+            "diagnosis": "Image analysis took too long. Please try again with a smaller, clearer image.",
+            "confidence": "low",
+            "observed_symptoms": [], "recommended_action": [],
+            "expert_escalation": "Please consult a local agricultural expert if the issue persists."
+        }
     except Exception as e:
         print(f"Gemini error: {e}")
         return {

@@ -159,7 +159,7 @@ say so and advise accordingly. Write every text value only in {L}, preferably in
 DATA: {json.dumps(ctx, ensure_ascii=False)}
 {ADVISORY_SCHEMA_V2}"""
     r = _generate(contents=prompt,
-        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.3))
+        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.3, max_output_tokens=4096))
     return _safe_parse(r)
 
 
@@ -203,7 +203,7 @@ EVIDENCE BUNDLE:
 {ADVISORY_SCHEMA_V2}"""
 
     r = _generate(contents=prompt,
-        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.3))
+        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.3, max_output_tokens=4096))
     
     parsed = _safe_parse(r)
     
@@ -255,10 +255,20 @@ def diagnose(image: bytes, mime: str, lang: str, crop: str = "", field_context: 
 
     context_section = ""
     if field_context:
+        cover = field_context.get("land_cover", {}) if isinstance(field_context, dict) else {}
+        vegetation = field_context.get("vegetation", {}) if isinstance(field_context, dict) else {}
+        compact_context = {
+            "land_cover": cover.get("class") if isinstance(cover, dict) else cover,
+            "is_cropland": cover.get("is_cropland") if isinstance(cover, dict) else None,
+            "ndvi": vegetation.get("ndvi") if isinstance(vegetation, dict) else None,
+            "ndwi": vegetation.get("ndwi") if isinstance(vegetation, dict) else None,
+        }
         context_section = f"""
 FIELD CONTEXT (use to provide more specific advice):
-{json.dumps(field_context, ensure_ascii=False, default=str)}
+{json.dumps(compact_context, ensure_ascii=False, default=str)}
 """
+    else:
+        compact_context = {}
 
     prompt = f"""You are a plant pathologist helping an Indian farmer. Examine this crop photo{hint}.
 {context_section}
@@ -266,26 +276,53 @@ FIELD CONTEXT (use to provide more specific advice):
 Write every user-facing text value only in {L}, preferably using its native script. Do not include English alongside the translation; keep JSON keys and standard crop/scientific abbreviations in English."""
 
     import hashlib
-    cache_context = json.dumps(field_context or {}, sort_keys=True, ensure_ascii=False, default=str)
+    cache_context = json.dumps(compact_context, sort_keys=True, ensure_ascii=False, default=str)
     cache_key = hashlib.sha256(image + lang.encode() + crop.encode() + cache_context.encode()).hexdigest()
     if cache_key in _diagnosis_cache:
         return dict(_diagnosis_cache[cache_key])
     r = _generate(
         contents=[types.Part.from_bytes(data=image, mime_type=mime), prompt],
-        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0, seed=0))
+        config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0, seed=0, max_output_tokens=3072))
     result = _safe_parse(r)
+    cacheable = isinstance(result, dict) and bool(result.get("diagnosis")) and "_raw" not in result
+    if not isinstance(result, dict):
+        result = {}
+    if "_raw" in result:
+        result = {
+            "healthy": False,
+            "likely_issue": "Could not determine",
+            "diagnosis": "The image response could not be read. Please retry with a clear, well-lit crop photo.",
+            "confidence": "low",
+            "observed_symptoms": [],
+            "recommended_action": [],
+            "expert_escalation": "Please consult a local agricultural expert if the issue persists.",
+            "_raw": result.get("_raw", ""),
+        }
     # Ensure backward compatibility
     if "likely_issue" not in result:
         result["likely_issue"] = result.get("diagnosis", "unknown")
+    if not result.get("diagnosis"):
+        result["diagnosis"] = result.get("summary", "The image could not be assessed clearly. Please try another photo.")
+    if not isinstance(result.get("healthy"), bool):
+        result["healthy"] = False
+    if result.get("confidence") not in ("low", "medium", "high"):
+        result["confidence"] = "low"
     if "recommended_action" not in result:
         result["recommended_action"] = result.get("treatment_organic", [])
+    if not isinstance(result["recommended_action"], list):
+        result["recommended_action"] = [str(result["recommended_action"])] if result["recommended_action"] else []
     if "expert_escalation" not in result:
         result["expert_escalation"] = result.get("when_to_seek_expert", "")
     if "observed_symptoms" not in result:
         result["observed_symptoms"] = result.get("symptoms_seen", [])
-    _diagnosis_cache[cache_key] = dict(result)
-    if len(_diagnosis_cache) > 64:
-        _diagnosis_cache.pop(next(iter(_diagnosis_cache)))
+    if not isinstance(result["observed_symptoms"], list):
+        result["observed_symptoms"] = [str(result["observed_symptoms"])] if result["observed_symptoms"] else []
+    result.setdefault("expert_escalation", result.get("when_to_seek_expert", "Consult a local agricultural expert if symptoms continue."))
+    # Do not cache provider/parser fallback text; later attempts may succeed.
+    if cacheable:
+        _diagnosis_cache[cache_key] = dict(result)
+        if len(_diagnosis_cache) > 64:
+            _diagnosis_cache.pop(next(iter(_diagnosis_cache)))
     return result
 
 
